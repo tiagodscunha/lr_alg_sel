@@ -1,0 +1,4363 @@
+> library(recommenderlab)
+Loading required package: Matrix
+Loading required package: arules
+
+Attaching package: 'arules'
+
+The following objects are masked from 'package:base':
+
+    abbreviate, write
+
+Loading required package: proxy
+
+Attaching package: 'proxy'
+
+The following object is masked from 'package:Matrix':
+
+    as.matrix
+
+The following objects are masked from 'package:stats':
+
+    as.dist, dist
+
+The following object is masked from 'package:base':
+
+    as.matrix
+
+Loading required package: registry
+> library(hash)
+hash-2.2.6 provided by Decision Patterns
+
+> library(e1071) 
+> library(foreach)
+> library(doMC)
+Loading required package: iterators
+Loading required package: parallel
+> registerDoMC(3)
+> source("/homes/tiagodscunha/auxiliary.R")
+
+Attaching package: 'entropy'
+
+The following object is masked from 'package:arules':
+
+    discretize
+
+
+Attaching package: 'ineq'
+
+The following object is masked from 'package:entropy':
+
+    entropy
+
+> data_folder <- "/homes/tiagodscunha/datasets/"
+> 
+> #Cunha2016
+> strategyA <- function(data, matrix, new_matrix){
++   mf <- hash()
++   mf$nusers <- as.numeric(dim(matrix)[1])
++   mf$nitems <- as.numeric(dim(matrix)[2])
++   mf$nratings <- as.numeric(nratings(matrix))
++   mf$sparsity <- 1 - mf$nratings / (mf$nusers*mf$nitems)  #\cite{Massa2007,Huang2008a} 
++   
++   #DF statistics - POST-PROCESSING
++   Combine(data[,3],mf,"ratings") #getRatings(matrix) does not work well with large datasets
++   
++   #DF-ROW statistics
++   Combine(rowCounts(matrix),mf,"rowCounts")      #number of ratings per row
++   Combine(rowMeans(matrix),mf,"rowMeans")        #row-wise rating means (excluding empty-cells)
++   Combine(rowSums(new_matrix),mf,"rowSums")      #sum of all ratings per row
++   
++   #DF-COL statistics
++   Combine(colCounts(matrix),mf,"colCounts")      #number of ratings per column
++   Combine(colMeans(matrix),mf,"colMeans")        #column-wise rating means (excluding empty-cells)
++   Combine(colSums(new_matrix),mf,"colSums")      #sum of all ratings per column
++   
++   print(mf)
++   
++   if(!header1){
++     saveHeader(mf,"mf_A.csv")
++     header1 <<- TRUE
++   }
++   saveToFile(mf,"mf_A.csv", files[i])
++ }
+> 
+> #Matuszyk2014
+> strategyB <- function(data, matrix, new_matrix){
++   #sample users
++   nusers <- as.numeric(dim(matrix)[1])
++   all_users <- unique(data[,1])
++   if(threshold_user <= nusers){
++ 	users <- sample(all_users, threshold_user)
++   }
++   else {
++ 	users <- all_users
++   }
++   #print(users)
++   
++   #assign users to items
++   assignments <- hash()
++   assignments_count <- hash()
++   lapply(users,
++          function(user){
++            assignments[user] = data[which(data[,1]==user),2]
++            assignments_count[user] = length(data[which(data[,1]==user),2])
++          })
++   #print(assignments)
++   #print(assignments_count)
++   
++   #assign users to preference classes
++   preference_classes = hash()
++   max_class = max(values(assignments_count))
++ 
++   lapply(keys(assignments_count),function(key){
++     val = toString(values(assignments_count, keys=key)[[1]])
++ 
++     if(has.key(val, preference_classes)){
++       preference_classes[val] = c(values(preference_classes, keys = val), key)
++     }
++     else{
++       preference_classes[val] = c(key)
++     }
++   })
++   #print(preference_classes)
++   
++   #create co-ratings matrix equivalence classes x equivalence classes
++   coratings <- matrix(NA,max_class,max_class)
++   
++   #assign the average number of co-rated items in common among its users
++   lapply(1:max_class, function(class1){
++     lapply(1:max_class, function(class2){
++       
++       if(is.na(coratings[class1,class2]) && is.na(coratings[class2,class1])){
++       
++         #get users
++         users_class1 = c()
++         users_class2 = c()
++         
++         if(has.key(toString(class1),preference_classes))
++           users_class1 = values(preference_classes, keys=toString(class1))
++         
++         if(has.key(toString(class2),preference_classes))
++           users_class2 = values(preference_classes, keys=toString(class2))
++   
++         if(length(users_class1) != 0 && length(users_class2) != 0){
++         
++         #compare each user of different class
++         co_rated = mean(unlist(lapply(users_class1, function(user1){
++           lapply(users_class2, function(user2){
++             #items of each user
++             items_users1 = values(assignments, keys=user1)
++             items_users2 = values(assignments, keys=user2)
++   
++             #count number of elements in common
++             length(intersect(items_users1,items_users2))
++           })
++         })))
++   
++         #print(co_rated)
++         coratings[class1,class2]<<-co_rated
++         coratings[class2,class1]<<-co_rated
++           
++         }
++       }
++     })
++   })
++   
++   #remove NA rows/columns
++   tmp = data.frame(coratings)
++   tmp1<-tmp[,-which(apply(tmp,2,function(x)all(is.na(x))))]
++   coratings_df <-as.matrix(tmp1[-which(apply(tmp1,1,function(x)all(is.na(x)))),])
++   #print(coratings_df)
++   
++   #extract metafeatures
++   mf = hash()
++   
++   nusers <- as.numeric(dim(matrix)[1])
++   nitems <- as.numeric(dim(matrix)[2])
++   nratings <- as.numeric(nratings(matrix))
++   mf$sparsity <- 1 - nratings / (nusers*nitems)  #\cite{Massa2007,Huang2008a} 
++   
++   mf$entropy <- entropy(coratings_df)
++   mf$gini <- ineq(coratings_df,type="Gini")
++   
++   print (mf)
++   
++   if(!header2){
++     saveHeader(mf,"mf_B.csv")
++     header2 <<- TRUE
++   }
++   saveToFile(mf,"mf_B.csv", files[i])
++ }
+> 
+> #Adomavicius2012
+> strategyC <- function(data, matrix, new_matrix){
++   mf = hash()
++   
++   nusers <- as.numeric(dim(matrix)[1])
++   nitems <- as.numeric(dim(matrix)[2])
++   nratings <- as.numeric(nratings(matrix))
++   mf$density <- nratings / (nusers*nitems) 
++   
++   Combine_StrategyC(rowCounts(matrix),mf,"user.count.")
++   Combine_StrategyC(colCounts(matrix),mf,"item.count.")
++   mf$variance = var(data[,3])
++   
++   print(mf)
++   
++   if(!header3){
++     saveHeader(mf,"mf_C.csv")
++     header3 <<- TRUE
++   }
++   saveToFile(mf,"mf_C.csv", files[i])
++ }
+> 
+> #Griffith2012
+> strategyD <- function(data, matrix, new_matrix){
++   
++   mf = hash()
++   
++   mf$user.count.mean = mean(rowCounts(matrix)) #validado #1
++   mf$user.mean.mean = mean(rowMeans(matrix)) #validado #2
++   mf$item.count.mean = mean(colCounts(matrix)) #validado #7
++   mf$item.mean.mean = mean(colMeans(matrix)) #validado #8
++   
++   #METAFEATURES WITH SAMPLE OF USERS
++   all_users <- unique(data[,1])
++   nusers <- as.numeric(dim(matrix)[1])
++   if(threshold_user <= nusers){
++         users <- sample(all_users, threshold_user)
++   }
++   else {
++         users <- all_users
++   }
++   #print(users)
++   
++   #user.number_neighbours.mean
++   data_sample <- data[which(data[,1] %in% users),]
++   rownames(data_sample) <- c()
++   items <- unique(data_sample[,2])
++   #print(data_sample)
++   matrix_sample <- as(data_sample, "realRatingMatrix")
++   matrix_sample_base <- as(as(matrix_sample, "dgCMatrix"),"matrix")   #package Matrix
++   #print(matrix_sample_base)
++   
++   #user.standard deviation.mean
++   user_ratings <- hash()
++   lapply(users,function(user){
++            user_ratings[toString(user)] = data_sample[which(data_sample[,1]==toString(user)),3]
++          })
++   tmp = unlist(
++         lapply(users, function(key){
++           val <- values(user_ratings, keys=toString(key))
++           sd(val)
++         }
++   ))
++   mf$user.standard_deviation.mean = mean(tmp, na.rm=TRUE) #validado #3
++   
++   
++   pearson <- matrix(NA, length(users), length(users))
++   lapply(1:length(users), function(user1){
++     lapply(1:length(users), function(user2){
++       values_user1 <- matrix_sample_base[rownames(matrix_sample_base)[user1], ]
++       values_user2 <- matrix_sample_base[rownames(matrix_sample_base)[user2], ]
++       pearson[user1,user2] <<- abs(cor(values_user1,values_user2,method="pearson"))
++     })
++   })
++   #print(pearson)
++   
++   neighbors = hash()
++   lapply(1:length(rownames(matrix_sample_base)), function(user){ 
++     val <- as.numeric(pearson[user,])
++     selected_indexes <- unlist(lapply(val, function(x){
++       x > 0.1 #value dictated by original paper
++     }))
++     current_user = rownames(matrix_sample_base)[user]
++     neighbors_user = rownames(matrix_sample_base)[selected_indexes]
++     neighbors_user = neighbors_user[neighbors_user != current_user]
++     if(!identical(neighbors_user, character(0))){
++       neighbors[current_user] = neighbors_user 
++     }
++   })
++   #print(neighbors)
++   
++   #user.number_neighbours.mean
++   mf$user.number_neighbours.mean <- mean(unlist(lapply(1:length(users), function(user){ #validado #4
++     if(has.key(toString(users[user]),neighbors)){
++       neighbors_user = values(neighbors, keys=users[user])
++       length(neighbors_user)
++     }
++     else {
++       0
++     }
++   })))
++   
++   #user.average_similarity.mean
++   mf$user.average_similarity.mean <- mean(unlist(lapply(1:length(users), function(user){ #validado #5
++     mean(sort(as.numeric(pearson[user,]), decreasing = T)[1:10])  #chose 10 instead of 30
++   })))
++   
++   #user.clustering_coefficient.mean
++   tmp <- unlist(lapply(1:length(rownames(matrix_sample_base)), function(i){
++     user = rownames(matrix_sample_base)[i]
++     if(has.key(user,neighbors)){
++       neighbors_user = values(neighbors, keys=user)
++       n = length(neighbors_user)
++ 
++       connections = hash()
++       lapply(neighbors_user, function(neighbor){
++         if(has.key(neighbor,neighbors)){
++           new_neighbors = values(neighbors, keys=neighbor)
++           res = intersect(new_neighbors,neighbors_user)
++ 
++           if(!identical(res, character(0))){
++             connections[neighbor] = res
++           }
++         }
++       })
++       #print(connections)
++       actual <- length(unique(c(keys(connections), unlist(values(connections))))) #any connection counts!
++       (2*actual+n) / (n*n - n)
++     }
++   }))
++   mf$user.clustering_coefficient.mean <- mean(replace(tmp, tmp==Inf, 0))    #validado #6
++   
++   #user.TFIDF.mean 
++   IDF <- as.numeric(colCounts(matrix_sample))
++   mf$user.TFIDF.mean <- mean(unlist(lapply(1:length(rownames(matrix_sample_base)), function(index){  #validado #9
++     val <- as.numeric(matrix_sample_base[index,])
++     val[which(val > 0)] <- 1  
++     sum(val/IDF)
++   })))
++   
++   #user_coratings.jaccard.mean
++   user_items <- hash()
++   lapply(users,function(user){
++            user_items[toString(user)] = data_sample[which(data_sample[,1]==toString(user)),2]
++          })
++   #print(user_items)
++   
++   mf$user_coratings.jaccard.mean <- mean(unlist(lapply(users, function(user1){  #validado #10
++     lapply(users, function(user2){
++       if(user1 != user2){
++         user1_items = values(user_items, keys=user1)
++         user2_items = values(user_items, keys=user2)
++ 
++         items_intersection = length(intersect(user1_items,user2_items))
++         items_union = length(union(user1_items,user2_items))
++         items_intersection/items_union
++       }
++       else {
++         0
++       }
++     })
++   })))
++   
++   #item.entropy.mean
++   item_ratings <- hash()
++   lapply(items,function(item){
++     item_ratings[toString(item)] = data_sample[which(data_sample[,2]==toString(item)),3]
++   })
++   #print(item_ratings)
++   
++   mf$item.entropy.mean <- mean(unlist(lapply(items, function(item){ #validado #11
++     val <- values(item_ratings, keys=item)
++     entropy(val)
++   })))
++   
++   print(mf)
++ 
++   if(!header4){
++     saveHeader(mf,"mf_D.csv")
++     header4 <<- TRUE
++   }
++   saveToFile(mf,"mf_D.csv", files[i])
++   
++ }
+> 
+> 
+> #Ekstrand2012
+> strategyE <- function(data, matrix, new_matrix){
++   mf = hash()
++   all_users <- unique(data[,1])
++   nusers <- as.numeric(dim(matrix)[1])
++   if(threshold_user <= nusers){
++         users <- sample(all_users, threshold_user)
++   }
++   else {
++         users <- all_users
++   }
++ 
++   
++   data_sample <- data[which(data[,1] %in% users),]
++   rownames(data_sample) <- c()
++   
++   user_ratings <- hash()
++   lapply(users,function(user){
++     user_ratings[toString(user)] = data_sample[which(data_sample[,1]==toString(user)),3]
++   })
++ 
++   mf$user.count.mean <- mean(rowCounts(matrix))
++   mf$user.mean.mean <- mean(rowMeans(new_matrix))
++   mf$user.variance.mean <- mean(unlist(lapply(users, function(user){
++     val <- values(user_ratings,keys=user)
++     var(val)
++   })), na.rm=TRUE)
++   
++   print(mf)
++   
++   if(!header5){
++     saveHeader(mf,"mf_E.csv")
++     header5 <<- TRUE
++   }
++   saveToFile(mf,"mf_E.csv", files[i])
++   
++ }
+> 
+> 
+> ################ MAIN
+> 
+> header1=FALSE
+> header2=FALSE
+> header3=FALSE
+> header4=FALSE
+> header5=FALSE
+> 
+> threshold_user = 1000 #0.1*length(all_users)
+> 
+> files <- dir(data_folder)
+> for(i in 1:length(files)){ 
++   print(files[i]) 
++   
++   data <- read.csv(paste(data_folder, files[i], sep=""),sep=";")
++   matrix <- as(data, "realRatingMatrix")  #package recommenderlab
++   new_matrix <- as(matrix, "dgCMatrix")   #package Matrix
++ 
++   strategyA(data, matrix, new_matrix)
++   strategyB(data, matrix, new_matrix)
++   strategyC(data, matrix, new_matrix)
++   strategyD(data, matrix, new_matrix)
++   strategyE(data, matrix, new_matrix)
++ }
+[1] "amazon-apps.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.442794
+  colCounts_gini : 0.817383
+  colCounts_kurtosis : 602.9513
+  colCounts_max : 2534
+  colCounts_mean : 10.84433
+  colCounts_median : 2
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 59.86174
+  colCounts_skewness : 20.58993
+  colMeans_entropy : 0.1087582
+  colMeans_gini : 0.2312248
+  colMeans_kurtosis : -1.034829
+  colMeans_max : 5
+  colMeans_mean : 3.373203
+  colMeans_median : 3.722222
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.388104
+  colMeans_skewness : -0.5001947
+  colSums_entropy : 1.606358
+  colSums_gini : 0.8507639
+  colSums_kurtosis : 643.8987
+  colSums_max : 11533
+  colSums_mean : 43.35377
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 260.7746
+  colSums_skewness : 21.35978
+  nitems : 24366
+  nratings : 264233
+  nusers : 132391
+  ratings_entropy : 0.08298152
+  ratings_gini : 0.16947
+  ratings_kurtosis : 0.1651472
+  ratings_max : 10
+  ratings_mean : 3.997828
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.357406
+  ratings_skewness : -1.171854
+  rowCounts_entropy : 0.3319034
+  rowCounts_gini : 0.4065934
+  rowCounts_kurtosis : 1471.788
+  rowCounts_max : 310
+  rowCounts_mean : 1.995853
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 3.118946
+  rowCounts_skewness : 24.17892
+  rowMeans_entropy : 0.06569747
+  rowMeans_gini : 0.155381
+  rowMeans_kurtosis : 0.6566101
+  rowMeans_max : 10
+  rowMeans_mean : 4.025753
+  rowMeans_median : 4.5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.227331
+  rowMeans_skewness : -1.247146
+  rowSums_entropy : 0.3745143
+  rowSums_gini : 0.4472095
+  rowSums_kurtosis : 918.284
+  rowSums_max : 908
+  rowSums_mean : 7.979077
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 12.07107
+  rowSums_skewness : 19.50247
+  sparsity : 0.9999181
+<hash> containing 3 key-value pair(s).
+  entropy : 2.34289
+  gini : 0.9371306
+  sparsity : 0.9999181
+<hash> containing 6 key-value pair(s).
+  density : 8.19114e-05
+  item.count.gini : 0.817383
+  item.count.skewness : 20.58993
+  user.count.gini : 0.4065934
+  user.count.skewness : 24.17892
+  variance : 1.84255
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 10.84433
+  item.entropy.mean : 0.01064891
+  item.mean.mean : 3.373203
+  user.TFIDF.mean : 1.213
+  user.average_similarity.mean : 0.2997334
+  user.clustering_coefficient.mean : 0.7891276
+  user.count.mean : 1.995853
+  user.mean.mean : 4.025753
+  user.number_neighbours.mean : 4.252
+  user.standard_deviation.mean : 0.7914268
+  user_coratings.jaccard.mean : 0.001699313
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.995853
+  user.mean.mean : 0.0003274677
+  user.variance.mean : 1.484128
+[1] "amazon-automotive.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.3813808
+  colCounts_gini : 0.4110508
+  colCounts_kurtosis : 1110.894
+  colCounts_max : 276
+  colCounts_mean : 1.887455
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 3.754249
+  colCounts_skewness : 23.65543
+  colMeans_entropy : 0.06207625
+  colMeans_gini : 0.1424677
+  colMeans_kurtosis : 1.076836
+  colMeans_max : 10
+  colMeans_mean : 4.157333
+  colMeans_median : 5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.218314
+  colMeans_skewness : -1.434433
+  colSums_entropy : 0.4384584
+  colSums_gini : 0.4638013
+  colSums_kurtosis : 1339.723
+  colSums_max : 1331
+  colSums_mean : 7.904136
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 16.37645
+  colSums_skewness : 25.61303
+  nitems : 73135
+  nratings : 138039
+  nusers : 85142
+  ratings_entropy : 0.07008762
+  ratings_gini : 0.1441997
+  ratings_kurtosis : 12.31797
+  ratings_max : 50
+  ratings_mean : 4.187722
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.297273
+  ratings_skewness : -1.064865
+  rowCounts_entropy : 0.2428888
+  rowCounts_gini : 0.3276718
+  rowCounts_kurtosis : 287.0921
+  rowCounts_max : 104
+  rowCounts_mean : 1.62128
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.889052
+  rowCounts_skewness : 10.96727
+  rowMeans_entropy : 0.07033437
+  rowMeans_gini : 0.1515492
+  rowMeans_kurtosis : 0.7887742
+  rowMeans_max : 10
+  rowMeans_mean : 4.115479
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.279769
+  rowMeans_skewness : -1.353739
+  rowSums_entropy : 0.3207204
+  rowSums_gini : 0.4037077
+  rowSums_kurtosis : 294.8875
+  rowSums_max : 500
+  rowSums_mean : 6.789469
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 8.544376
+  rowSums_skewness : 10.81862
+  sparsity : 0.9999778
+<hash> containing 3 key-value pair(s).
+  entropy : 2.997014
+  gini : 0.9675448
+  sparsity : 0.9999778
+<hash> containing 6 key-value pair(s).
+  density : 2.216832e-05
+  item.count.gini : 0.4110508
+  item.count.skewness : 23.65543
+  user.count.gini : 0.3276718
+  user.count.skewness : 10.96727
+  variance : 1.682917
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 1.887455
+  item.entropy.mean : 0.001340115
+  item.mean.mean : 4.157333
+  user.TFIDF.mean : 1.464
+  user.average_similarity.mean : 0.1120155
+  user.clustering_coefficient.mean : 0.5448718
+  user.count.mean : 1.62128
+  user.mean.mean : 4.115479
+  user.number_neighbours.mean : 0.142
+  user.standard_deviation.mean : 0.7590377
+  user_coratings.jaccard.mean : 7.539313e-05
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.62128
+  user.mean.mean : 9.283475e-05
+  user.variance.mean : 1.200518
+[1] "amazon-baby.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7345022
+  colCounts_gini : 0.6207781
+  colCounts_kurtosis : 285.524
+  colCounts_max : 377
+  colCounts_mean : 3.961025
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 9.90178
+  colCounts_skewness : 12.80866
+  colMeans_entropy : 0.05296537
+  colMeans_gini : 0.14463
+  colMeans_kurtosis : 0.7653978
+  colMeans_max : 8
+  colMeans_mean : 4.053649
+  colMeans_median : 4.428571
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.130904
+  colMeans_skewness : -1.237378
+  colSums_entropy : 0.7868293
+  colSums_gini : 0.6444021
+  colSums_kurtosis : 309.0474
+  colSums_max : 1636
+  colSums_mean : 16.3386
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 42.8615
+  colSums_skewness : 13.41888
+  nitems : 23092
+  nratings : 91468
+  nusers : 53188
+  ratings_entropy : 0.07065984
+  ratings_gini : 0.1522967
+  ratings_kurtosis : 1.123242
+  ratings_max : 20
+  ratings_mean : 4.124841
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.299589
+  ratings_skewness : -1.1903
+  rowCounts_entropy : 0.2799569
+  rowCounts_gini : 0.3570067
+  rowCounts_kurtosis : 431.5865
+  rowCounts_max : 140
+  rowCounts_mean : 1.719711
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.233622
+  rowCounts_skewness : 12.83027
+  rowMeans_entropy : 0.06889654
+  rowMeans_gini : 0.1545787
+  rowMeans_kurtosis : 0.6795256
+  rowMeans_max : 10
+  rowMeans_mean : 4.079598
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.267379
+  rowMeans_skewness : -1.267866
+  rowSums_entropy : 0.3477671
+  rowSums_gini : 0.4230559
+  rowSums_kurtosis : 692.3021
+  rowSums_max : 724
+  rowSums_mean : 7.093536
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 9.796704
+  rowSums_skewness : 15.30583
+  sparsity : 0.9999255
+<hash> containing 3 key-value pair(s).
+  entropy : 2.698164
+  gini : 0.9610158
+  sparsity : 0.9999255
+<hash> containing 6 key-value pair(s).
+  density : 7.447216e-05
+  item.count.gini : 0.6207781
+  item.count.skewness : 12.80866
+  user.count.gini : 0.3570067
+  user.count.skewness : 12.83027
+  variance : 1.688931
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 3.961025
+  item.entropy.mean : 0.004682004
+  item.mean.mean : 4.053649
+  user.TFIDF.mean : 1.356
+  user.average_similarity.mean : 0.1464061
+  user.clustering_coefficient.mean : 1.006533
+  user.count.mean : 1.719711
+  user.mean.mean : 4.079598
+  user.number_neighbours.mean : 0.814
+  user.standard_deviation.mean : 0.7542993
+  user_coratings.jaccard.mean : 0.0003208888
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.719711
+  user.mean.mean : 0.0003071859
+  user.variance.mean : 1.194887
+[1] "amazon-beauty.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.5460147
+  colCounts_gini : 0.5249021
+  colCounts_kurtosis : 3339.059
+  colCounts_max : 791
+  colCounts_mean : 2.658505
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 6.352924
+  colCounts_skewness : 35.04899
+  colMeans_entropy : 0.05650984
+  colMeans_gini : 0.1398375
+  colMeans_kurtosis : 2.931939
+  colMeans_max : 24
+  colMeans_mean : 4.154778
+  colMeans_median : 4.8
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.178301
+  colMeans_skewness : -1.238703
+  colSums_entropy : 0.585935
+  colSums_gini : 0.5529344
+  colSums_kurtosis : 3548.327
+  colSums_max : 3401
+  colSums_mean : 11.05507
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 26.87556
+  colSums_skewness : 36.26528
+  nitems : 76253
+  nratings : 202719
+  nusers : 121027
+  ratings_entropy : 0.07390104
+  ratings_gini : 0.1511842
+  ratings_kurtosis : 5.379802
+  ratings_max : 40
+  ratings_mean : 4.158377
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.336141
+  ratings_skewness : -0.9839254
+  rowCounts_entropy : 0.2766965
+  rowCounts_gini : 0.3464524
+  rowCounts_kurtosis : 817.4693
+  rowCounts_max : 186
+  rowCounts_mean : 1.67499
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.51677
+  rowCounts_skewness : 20.27753
+  rowMeans_entropy : 0.07173173
+  rowMeans_gini : 0.153069
+  rowMeans_kurtosis : 5.617141
+  rowMeans_max : 40
+  rowMeans_mean : 4.119917
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.300686
+  rowMeans_skewness : -1.105561
+  rowSums_entropy : 0.345612
+  rowSums_gini : 0.4141036
+  rowSums_kurtosis : 671.5855
+  rowSums_max : 740
+  rowSums_mean : 6.965239
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 10.72772
+  rowSums_skewness : 18.24563
+  sparsity : 0.999978
+<hash> containing 3 key-value pair(s).
+  entropy : 3.152608
+  gini : 0.976294
+  sparsity : 0.999978
+<hash> containing 6 key-value pair(s).
+  density : 2.196622e-05
+  item.count.gini : 0.5249021
+  item.count.skewness : 35.04899
+  user.count.gini : 0.3464524
+  user.count.skewness : 20.27753
+  variance : 1.785274
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.658505
+  item.entropy.mean : 0.001821219
+  item.mean.mean : 4.154778
+  user.TFIDF.mean : 1.589
+  user.average_similarity.mean : 0.1233227
+  user.clustering_coefficient.mean : 0.4452214
+  user.count.mean : 1.67499
+  user.mean.mean : 4.119917
+  user.number_neighbours.mean : 0.29
+  user.standard_deviation.mean : 0.7581533
+  user_coratings.jaccard.mean : 0.0001896549
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.67499
+  user.mean.mean : 9.13438e-05
+  user.variance.mean : 1.324298
+[1] "amazon-cd.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.5021782
+  colCounts_gini : 0.5001211
+  colCounts_kurtosis : 335.4323
+  colCounts_max : 304
+  colCounts_mean : 2.455555
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 5.014403
+  colCounts_skewness : 13.25658
+  colMeans_entropy : 0.03041764
+  colMeans_gini : 0.09745674
+  colMeans_kurtosis : 23.82818
+  colMeans_max : 41
+  colMeans_mean : 4.439485
+  colMeans_median : 5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 0.9553499
+  colMeans_skewness : -0.6174053
+  colSums_entropy : 0.5218304
+  colSums_gini : 0.5198865
+  colSums_kurtosis : 278.697
+  colSums_max : 986
+  colSums_mean : 10.88165
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 22.15696
+  colSums_skewness : 12.55692
+  nitems : 151198
+  nratings : 371275
+  nusers : 157862
+  ratings_entropy : 0.04478987
+  ratings_gini : 0.1105684
+  ratings_kurtosis : 55.41486
+  ratings_max : 77
+  ratings_mean : 4.431443
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.149428
+  ratings_skewness : 0.1677737
+  rowCounts_entropy : 0.6287751
+  rowCounts_gini : 0.5173576
+  rowCounts_kurtosis : 11022.95
+  rowCounts_max : 2242
+  rowCounts_mean : 2.351896
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 12.68197
+  rowCounts_skewness : 81.00932
+  rowMeans_entropy : 0.03820982
+  rowMeans_gini : 0.09813799
+  rowMeans_kurtosis : 21.19669
+  rowMeans_max : 45
+  rowMeans_mean : 4.486271
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.048946
+  rowMeans_skewness : -0.8954002
+  rowSums_entropy : 0.6414625
+  rowSums_gini : 0.535922
+  rowSums_kurtosis : 12471.15
+  rowSums_max : 10633
+  rowSums_mean : 10.42229
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 56.12159
+  rowSums_skewness : 85.95445
+  sparsity : 0.9999844
+<hash> containing 3 key-value pair(s).
+  entropy : 3.277899
+  gini : 0.9851621
+  sparsity : 0.9999844
+<hash> containing 6 key-value pair(s).
+  density : 1.555507e-05
+  item.count.gini : 0.5001211
+  item.count.skewness : 13.25658
+  user.count.gini : 0.5173576
+  user.count.skewness : 81.00932
+  variance : 1.321185
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.455555
+  item.entropy.mean : 0.0008450792
+  item.mean.mean : 4.439485
+  user.TFIDF.mean : 2.095
+  user.average_similarity.mean : 0.1106596
+  user.clustering_coefficient.mean : 0.4791667
+  user.count.mean : 2.351896
+  user.mean.mean : 4.486271
+  user.number_neighbours.mean : 0.112
+  user.standard_deviation.mean : 0.5908754
+  user_coratings.jaccard.mean : 5.702274e-05
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 2.351896
+  user.mean.mean : 6.893142e-05
+  user.variance.mean : 1.11511
+[1] "amazon-clothes.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.4724092
+  colCounts_gini : 0.4674792
+  colCounts_kurtosis : 594.6294
+  colCounts_max : 319
+  colCounts_mean : 2.145879
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 4.627013
+  colCounts_skewness : 17.34215
+  colMeans_entropy : 0.05396246
+  colMeans_gini : 0.1409589
+  colMeans_kurtosis : 0.8959114
+  colMeans_max : 5
+  colMeans_mean : 4.112565
+  colMeans_median : 4.5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.147533
+  colMeans_skewness : -1.3342
+  colSums_entropy : 0.5212047
+  colSums_gini : 0.5111728
+  colSums_kurtosis : 617.0411
+  colSums_max : 1367
+  colSums_mean : 8.890741
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 19.73578
+  colSums_skewness : 17.63461
+  nitems : 267503
+  nratings : 574029
+  nusers : 311726
+  ratings_entropy : 0.06275992
+  ratings_gini : 0.1447131
+  ratings_kurtosis : 0.6826151
+  ratings_max : 5
+  ratings_mean : 4.14317
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.232074
+  ratings_skewness : -1.352847
+  rowCounts_entropy : 0.29132
+  rowCounts_gini : 0.3765208
+  rowCounts_kurtosis : 2204.135
+  rowCounts_max : 349
+  rowCounts_mean : 1.841454
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.476605
+  rowCounts_skewness : 24.19162
+  rowMeans_entropy : 0.05877552
+  rowMeans_gini : 0.1452036
+  rowMeans_kurtosis : 0.8236813
+  rowMeans_max : 5
+  rowMeans_mean : 4.100836
+  rowMeans_median : 4.625
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.185391
+  rowMeans_skewness : -1.342132
+  rowSums_entropy : 0.3493727
+  rowSums_gini : 0.4307783
+  rowSums_kurtosis : 1927.553
+  rowSums_max : 1278
+  rowSums_mean : 7.629457
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 10.71742
+  rowSums_skewness : 22.84032
+  sparsity : 0.9999931
+<hash> containing 3 key-value pair(s).
+  entropy : NaN
+  gini : NaN
+  sparsity : 0.9999931
+<hash> containing 6 key-value pair(s).
+  density : 6.883862e-06
+  item.count.gini : 0.4674792
+  item.count.skewness : 17.34215
+  user.count.gini : 0.3765208
+  user.count.skewness : 24.19162
+  variance : 1.518006
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.145879
+  item.entropy.mean : 0.00102423
+  item.mean.mean : 4.112565
+  user.TFIDF.mean : 1.738
+  user.average_similarity.mean : 0.1064467
+  user.clustering_coefficient.mean : 0
+  user.count.mean : 1.841454
+  user.mean.mean : 4.100836
+  user.number_neighbours.mean : 0.062
+  user.standard_deviation.mean : 0.7296415
+  user_coratings.jaccard.mean : 3.297498e-05
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.841454
+  user.mean.mean : 2.852101e-05
+  user.variance.mean : 1.129617
+[1] "amazon-digital-music.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.4190574
+  colCounts_gini : 0.4016555
+  colCounts_kurtosis : 568.9706
+  colCounts_max : 199
+  colCounts_mean : 1.772515
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 4.022874
+  colCounts_skewness : 18.37175
+  colMeans_entropy : 0.02412138
+  colMeans_gini : 0.06861762
+  colMeans_kurtosis : 8.402294
+  colMeans_max : 10
+  colMeans_mean : 4.625992
+  colMeans_median : 5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 0.8330124
+  colMeans_skewness : -2.61408
+  colSums_entropy : 0.4219592
+  colSums_gini : 0.4195775
+  colSums_kurtosis : 621.1803
+  colSums_max : 948
+  colSums_mean : 8.094541
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 17.83005
+  colSums_skewness : 18.74676
+  nitems : 47313
+  nratings : 83863
+  nusers : 47824
+  ratings_entropy : 0.03438886
+  ratings_gini : 0.08462224
+  ratings_kurtosis : 8.113405
+  ratings_max : 20
+  ratings_mean : 4.566698
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 0.9980107
+  ratings_skewness : -1.569153
+  rowCounts_entropy : 0.345193
+  rowCounts_gini : 0.3791599
+  rowCounts_kurtosis : 5559
+  rowCounts_max : 489
+  rowCounts_mean : 1.753576
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 4.073856
+  rowCounts_skewness : 56.03493
+  rowMeans_entropy : 0.03341682
+  rowMeans_gini : 0.08367285
+  rowMeans_kurtosis : 7.085502
+  rowMeans_max : 15
+  rowMeans_mean : 4.563119
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 0.9727049
+  rowMeans_skewness : -1.895452
+  rowSums_entropy : 0.3728477
+  rowSums_gini : 0.4109349
+  rowSums_kurtosis : 6474.563
+  rowSums_max : 2426
+  rowSums_mean : 8.00805
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 18.98694
+  rowSums_skewness : 60.25807
+  sparsity : 0.9999629
+<hash> containing 3 key-value pair(s).
+  entropy : 3.083557
+  gini : 0.9743476
+  sparsity : 0.9999629
+<hash> containing 6 key-value pair(s).
+  density : 3.706329e-05
+  item.count.gini : 0.4016555
+  item.count.skewness : 18.37175
+  user.count.gini : 0.3791599
+  user.count.skewness : 56.03493
+  variance : 0.9960253
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 1.772515
+  item.entropy.mean : 0.001198043
+  item.mean.mean : 4.625992
+  user.TFIDF.mean : 1.746
+  user.average_similarity.mean : 0.121162
+  user.clustering_coefficient.mean : 0.8820755
+  user.count.mean : 1.753576
+  user.mean.mean : 4.563119
+  user.number_neighbours.mean : 0.272
+  user.standard_deviation.mean : 0.395141
+  user_coratings.jaccard.mean : 0.0001486094
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.753576
+  user.mean.mean : 0.0001692569
+  user.variance.mean : 0.857187
+[1] "amazon-food.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.5473029
+  colCounts_gini : 0.5153842
+  colCounts_kurtosis : 1872.354
+  colCounts_max : 659
+  colCounts_mean : 2.546686
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 7.253374
+  colCounts_skewness : 31.59856
+  colMeans_entropy : 0.05544443
+  colMeans_gini : 0.132637
+  colMeans_kurtosis : 2.315503
+  colMeans_max : 20
+  colMeans_mean : 4.225116
+  colMeans_median : 5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.173131
+  colMeans_skewness : -1.438552
+  colSums_entropy : 0.6005838
+  colSums_gini : 0.5499103
+  colSums_kurtosis : 1682.688
+  colSums_max : 2756
+  colSums_mean : 10.89796
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 32.11384
+  colSums_skewness : 30.56903
+  nitems : 51139
+  nratings : 130235
+  nusers : 76844
+  ratings_entropy : 0.06744519
+  ratings_gini : 0.13784
+  ratings_kurtosis : 12.90922
+  ratings_max : 38
+  ratings_mean : 4.279272
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.330527
+  ratings_skewness : -0.4291992
+  rowCounts_entropy : 0.315355
+  rowCounts_gini : 0.3605157
+  rowCounts_kurtosis : 858.9523
+  rowCounts_max : 205
+  rowCounts_mean : 1.694797
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 3.104346
+  rowCounts_skewness : 21.97903
+  rowMeans_entropy : 0.06595696
+  rowMeans_gini : 0.1387074
+  rowMeans_kurtosis : 2.918504
+  rowMeans_max : 20
+  rowMeans_mean : 4.242659
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.278265
+  rowMeans_skewness : -1.218908
+  rowSums_entropy : 0.3787581
+  rowSums_gini : 0.4220608
+  rowSums_kurtosis : 1065.429
+  rowSums_max : 1109
+  rowSums_mean : 7.252499
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 13.84041
+  rowSums_skewness : 23.55733
+  sparsity : 0.9999669
+<hash> containing 3 key-value pair(s).
+  entropy : 3.153273
+  gini : 0.9787449
+  sparsity : 0.9999669
+<hash> containing 6 key-value pair(s).
+  density : 3.314099e-05
+  item.count.gini : 0.5153842
+  item.count.skewness : 31.59856
+  user.count.gini : 0.3605157
+  user.count.skewness : 21.97903
+  variance : 1.770303
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.546686
+  item.entropy.mean : 0.002564832
+  item.mean.mean : 4.225116
+  user.TFIDF.mean : 1.572
+  user.average_similarity.mean : 0.1328409
+  user.clustering_coefficient.mean : 0.7117513
+  user.count.mean : 1.694797
+  user.mean.mean : 4.242659
+  user.number_neighbours.mean : 0.456
+  user.standard_deviation.mean : 0.7660059
+  user_coratings.jaccard.mean : 0.0002386123
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.694797
+  user.mean.mean : 0.0001418193
+  user.variance.mean : 1.313809
+[1] "amazon-games.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.826315
+  colCounts_gini : 0.6580263
+  colCounts_kurtosis : 2349.29
+  colCounts_max : 1565
+  colCounts_mean : 5.436016
+  colCounts_median : 2
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 18.48567
+  colCounts_skewness : 35.38626
+  colMeans_entropy : 0.0629275
+  colMeans_gini : 0.1654509
+  colMeans_kurtosis : 0.3916821
+  colMeans_max : 10
+  colMeans_mean : 3.83054
+  colMeans_median : 4
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.177592
+  colMeans_skewness : -0.9355709
+  colSums_entropy : 0.8962776
+  colSums_gini : 0.6832504
+  colSums_kurtosis : 2870.151
+  colSums_max : 7048
+  colSums_mean : 21.65911
+  colSums_median : 7
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 78.64157
+  colSums_skewness : 39.56062
+  nitems : 24600
+  nratings : 133726
+  nusers : 82676
+  ratings_entropy : 0.08690783
+  ratings_gini : 0.1752585
+  ratings_kurtosis : 1.245205
+  ratings_max : 29
+  ratings_mean : 3.984371
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.398061
+  ratings_skewness : -0.9403514
+  rowCounts_entropy : 0.2867446
+  rowCounts_gini : 0.3379387
+  rowCounts_kurtosis : 1686.753
+  rowCounts_max : 263
+  rowCounts_mean : 1.617471
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.826421
+  rowCounts_skewness : 28.43889
+  rowMeans_entropy : 0.08801603
+  rowMeans_gini : 0.1795366
+  rowMeans_kurtosis : 0.1566536
+  rowMeans_max : 16.66667
+  rowMeans_mean : 3.937274
+  rowMeans_median : 4.5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.387256
+  rowMeans_skewness : -1.025313
+  rowSums_entropy : 0.3729934
+  rowSums_gini : 0.4250847
+  rowSums_kurtosis : 1539.539
+  rowSums_max : 1053
+  rowSums_mean : 6.444603
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 11.67724
+  rowSums_skewness : 26.71389
+  sparsity : 0.9999342
+<hash> containing 3 key-value pair(s).
+  entropy : 3.029298
+  gini : 0.9726347
+  sparsity : 0.9999342
+<hash> containing 6 key-value pair(s).
+  density : 6.575084e-05
+  item.count.gini : 0.6580263
+  item.count.skewness : 35.38626
+  user.count.gini : 0.3379387
+  user.count.skewness : 28.43889
+  variance : 1.954573
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 5.436016
+  item.entropy.mean : 0.006698674
+  item.mean.mean : 3.83054
+  user.TFIDF.mean : 1.234
+  user.average_similarity.mean : 0.1734978
+  user.clustering_coefficient.mean : 0.8987321
+  user.count.mean : 1.617471
+  user.mean.mean : 3.937274
+  user.number_neighbours.mean : 1.016
+  user.standard_deviation.mean : 0.8289531
+  user_coratings.jaccard.mean : 0.0007218367
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.617471
+  user.mean.mean : 0.0002619757
+  user.variance.mean : 1.262022
+[1] "amazon-garden.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.5775624
+  colCounts_gini : 0.5469797
+  colCounts_kurtosis : 390.955
+  colCounts_max : 326
+  colCounts_mean : 2.914687
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 6.215331
+  colCounts_skewness : 13.56046
+  colMeans_entropy : 0.07294124
+  colMeans_gini : 0.1692047
+  colMeans_kurtosis : 0.1787463
+  colMeans_max : 10
+  colMeans_mean : 3.935331
+  colMeans_median : 4.333333
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.276447
+  colMeans_skewness : -1.079029
+  colSums_entropy : 0.6449259
+  colSums_gini : 0.5851466
+  colSums_kurtosis : 496.026
+  colSums_max : 1501
+  colSums_mean : 11.66319
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 26.18445
+  colSums_skewness : 15.01513
+  nitems : 34004
+  nratings : 99111
+  nusers : 71480
+  ratings_entropy : 0.08926911
+  ratings_gini : 0.1738814
+  ratings_kurtosis : 0.0935637
+  ratings_max : 15
+  ratings_mean : 4.001524
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.408218
+  ratings_skewness : -1.12029
+  rowCounts_entropy : 0.1584244
+  rowCounts_gini : 0.2440692
+  rowCounts_kurtosis : 2768.161
+  rowCounts_max : 161
+  rowCounts_mean : 1.386556
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.361422
+  rowCounts_skewness : 29.59023
+  rowMeans_entropy : 0.08834746
+  rowMeans_gini : 0.1782803
+  rowMeans_kurtosis : -0.01130571
+  rowMeans_max : 15
+  rowMeans_mean : 3.949832
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.390049
+  rowMeans_skewness : -1.083921
+  rowSums_entropy : 0.2517571
+  rowSums_gini : 0.3514345
+  rowSums_kurtosis : 1878.182
+  rowSums_max : 642
+  rowSums_mean : 5.548335
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 6.022228
+  rowSums_skewness : 23.54934
+  sparsity : 0.9999592
+<hash> containing 3 key-value pair(s).
+  entropy : 2.985295
+  gini : 0.9690891
+  sparsity : 0.9999592
+<hash> containing 6 key-value pair(s).
+  density : 4.077625e-05
+  item.count.gini : 0.5469797
+  item.count.skewness : 13.56046
+  user.count.gini : 0.2440692
+  user.count.skewness : 29.59023
+  variance : 1.983077
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.914687
+  item.entropy.mean : 0.003625069
+  item.mean.mean : 3.935331
+  user.TFIDF.mean : 1.288
+  user.average_similarity.mean : 0.1207136
+  user.clustering_coefficient.mean : 0.5567593
+  user.count.mean : 1.386556
+  user.mean.mean : 3.949832
+  user.number_neighbours.mean : 0.26
+  user.standard_deviation.mean : 0.7539834
+  user_coratings.jaccard.mean : 0.0001545096
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.386556
+  user.mean.mean : 0.0001631671
+  user.variance.mean : 1.429143
+[1] "amazon-health.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7179419
+  colCounts_gini : 0.6049216
+  colCounts_kurtosis : 2406.374
+  colCounts_max : 1145
+  colCounts_mean : 3.552599
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 11.31665
+  colCounts_skewness : 34.79025
+  colMeans_entropy : 0.06169524
+  colMeans_gini : 0.1509284
+  colMeans_kurtosis : 0.6729053
+  colMeans_max : 5
+  colMeans_mean : 4.055353
+  colMeans_median : 4.5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.201345
+  colMeans_skewness : -1.294865
+  colSums_entropy : 0.7715121
+  colSums_gini : 0.6310797
+  colSums_kurtosis : 3001.766
+  colSums_max : 5293
+  colSums_mean : 14.61107
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 49.25635
+  colSums_skewness : 39.0865
+  nitems : 84108
+  nratings : 298802
+  nusers : 185112
+  ratings_entropy : 0.0771393
+  ratings_gini : 0.1554543
+  ratings_kurtosis : 0.4269079
+  ratings_max : 5
+  ratings_mean : 4.112784
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.334798
+  ratings_skewness : -1.344135
+  rowCounts_entropy : 0.2552925
+  rowCounts_gini : 0.3285319
+  rowCounts_kurtosis : 1778.983
+  rowCounts_max : 285
+  rowCounts_mean : 1.614169
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.317418
+  rowCounts_skewness : 25.645
+  rowMeans_entropy : 0.07608017
+  rowMeans_gini : 0.160535
+  rowMeans_kurtosis : 0.35768
+  rowMeans_max : 5
+  rowMeans_mean : 4.056494
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.315336
+  rowMeans_skewness : -1.286274
+  rowSums_entropy : 0.3345327
+  rowSums_gini : 0.4065988
+  rowSums_kurtosis : 1992.202
+  rowSums_max : 1313
+  rowSums_mean : 6.638727
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 10.19062
+  rowSums_skewness : 26.43856
+  sparsity : 0.9999808
+<hash> containing 3 key-value pair(s).
+  entropy : 3.181707
+  gini : 0.9807302
+  sparsity : 0.9999808
+<hash> containing 6 key-value pair(s).
+  density : 1.919162e-05
+  item.count.gini : 0.6049216
+  item.count.skewness : 34.79025
+  user.count.gini : 0.3285319
+  user.count.skewness : 25.645
+  variance : 1.781685
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 3.552599
+  item.entropy.mean : 0.002820989
+  item.mean.mean : 4.055353
+  user.TFIDF.mean : 1.45
+  user.average_similarity.mean : 0.1204479
+  user.clustering_coefficient.mean : 0.8859979
+  user.count.mean : 1.614169
+  user.mean.mean : 4.056494
+  user.number_neighbours.mean : 0.288
+  user.standard_deviation.mean : 0.7353143
+  user_coratings.jaccard.mean : 0.0001392602
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.614169
+  user.mean.mean : 7.893098e-05
+  user.variance.mean : 1.193722
+[1] "amazon-home.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7369851
+  colCounts_gini : 0.6082212
+  colCounts_kurtosis : 596.9686
+  colCounts_max : 653
+  colCounts_mean : 3.436962
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 10.18216
+  colCounts_skewness : 18.32025
+  colMeans_entropy : 0.06086432
+  colMeans_gini : 0.1503221
+  colMeans_kurtosis : 0.7365818
+  colMeans_max : 10
+  colMeans_mean : 4.060155
+  colMeans_median : 4.5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.197783
+  colMeans_skewness : -1.266611
+  colSums_entropy : 0.7887204
+  colSums_gini : 0.6351
+  colSums_kurtosis : 674.1931
+  colSums_max : 3123
+  colSums_mean : 14.11718
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 43.23659
+  colSums_skewness : 19.14873
+  nitems : 123878
+  nratings : 425764
+  nusers : 251162
+  ratings_entropy : 0.07736786
+  ratings_gini : 0.1572759
+  ratings_kurtosis : 1.074931
+  ratings_max : 24
+  ratings_mean : 4.107459
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.34407
+  ratings_skewness : -1.187228
+  rowCounts_entropy : 0.2652082
+  rowCounts_gini : 0.3465462
+  rowCounts_kurtosis : 914.8062
+  rowCounts_max : 210
+  rowCounts_mean : 1.695177
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.281136
+  rowCounts_skewness : 18.92663
+  rowMeans_entropy : 0.07800837
+  rowMeans_gini : 0.1659841
+  rowMeans_kurtosis : 0.3981857
+  rowMeans_max : 15
+  rowMeans_mean : 4.017237
+  rowMeans_median : 4.75
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.327369
+  rowMeans_skewness : -1.171005
+  rowSums_entropy : 0.3535853
+  rowSums_gini : 0.4266831
+  rowSums_kurtosis : 964.6575
+  rowSums_max : 958
+  rowSums_mean : 6.962869
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 10.17625
+  rowSums_skewness : 18.89715
+  sparsity : 0.9999863
+<hash> containing 3 key-value pair(s).
+  entropy : 3.210251
+  gini : 0.9814027
+  sparsity : 0.9999863
+<hash> containing 6 key-value pair(s).
+  density : 1.368424e-05
+  item.count.gini : 0.6082212
+  item.count.skewness : 18.32025
+  user.count.gini : 0.3465462
+  user.count.skewness : 18.92663
+  variance : 1.806525
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 3.436962
+  item.entropy.mean : 0.002732392
+  item.mean.mean : 4.060155
+  user.TFIDF.mean : 1.54
+  user.average_similarity.mean : 0.1146492
+  user.clustering_coefficient.mean : 0.3997955
+  user.count.mean : 1.695177
+  user.mean.mean : 4.017237
+  user.number_neighbours.mean : 0.21
+  user.standard_deviation.mean : 0.7549798
+  user_coratings.jaccard.mean : 9.064403e-05
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.695177
+  user.mean.mean : 5.620747e-05
+  user.variance.mean : 1.1662
+[1] "amazon-instant-video.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.20729
+  colCounts_gini : 0.7569276
+  colCounts_kurtosis : 548.8573
+  colCounts_max : 1228
+  colCounts_mean : 6.579261
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 33.34738
+  colCounts_skewness : 20.16952
+  colMeans_entropy : 0.07943027
+  colMeans_gini : 0.1757887
+  colMeans_kurtosis : 618.0954
+  colMeans_max : 82.5
+  colMeans_mean : 3.94554
+  colMeans_median : 4.333333
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.715328
+  colMeans_skewness : 15.42715
+  colSums_entropy : 1.319512
+  colSums_gini : 0.7898161
+  colSums_kurtosis : 498.2795
+  colSums_max : 5079
+  colSums_mean : 28.52229
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 149.1798
+  colSums_skewness : 19.34001
+  nitems : 8882
+  nratings : 58437
+  nusers : 42692
+  ratings_entropy : 0.05693493
+  ratings_gini : 0.1234894
+  ratings_kurtosis : 2688.287
+  ratings_max : 164
+  ratings_mean : 4.335181
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.451676
+  ratings_skewness : 26.532
+  rowCounts_entropy : 0.1579052
+  rowCounts_gini : 0.2378769
+  rowCounts_kurtosis : 367.5463
+  rowCounts_max : 54
+  rowCounts_mean : 1.368804
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.357629
+  rowCounts_skewness : 14.36099
+  rowMeans_entropy : 0.04830256
+  rowMeans_gini : 0.1139585
+  rowMeans_kurtosis : 7.466266
+  rowMeans_max : 22
+  rowMeans_mean : 4.365531
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.129931
+  rowMeans_skewness : -1.285248
+  rowSums_entropy : 0.1933534
+  rowSums_gini : 0.29095
+  rowSums_kurtosis : 589.8625
+  rowSums_max : 377
+  rowSums_mean : 5.934016
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 5.972913
+  rowSums_skewness : 16.16529
+  sparsity : 0.9998459
+<hash> containing 3 key-value pair(s).
+  entropy : 2.760166
+  gini : 0.9617812
+  sparsity : 0.9998459
+<hash> containing 6 key-value pair(s).
+  density : 0.0001541099
+  item.count.gini : 0.7569276
+  item.count.skewness : 20.16952
+  user.count.gini : 0.2378769
+  user.count.skewness : 14.36099
+  variance : 2.107362
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 6.579261
+  item.entropy.mean : 0.003936707
+  item.mean.mean : 3.94554
+  user.TFIDF.mean : 0.785
+  user.average_similarity.mean : 0.3702885
+  user.clustering_coefficient.mean : 0.6803955
+  user.count.mean : 1.368804
+  user.mean.mean : 4.365531
+  user.number_neighbours.mean : 5.556
+  user.standard_deviation.mean : 0.588714
+  user_coratings.jaccard.mean : 0.00360794
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.368804
+  user.mean.mean : 0.0006680945
+  user.variance.mean : 0.8220032
+[1] "amazon-instruments.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.4822354
+  colCounts_gini : 0.473028
+  colCounts_kurtosis : 1272.869
+  colCounts_max : 369
+  colCounts_mean : 2.194478
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 5.287458
+  colCounts_skewness : 25.58221
+  colMeans_entropy : 0.04924971
+  colMeans_gini : 0.127574
+  colMeans_kurtosis : 1.920875
+  colMeans_max : 12
+  colMeans_mean : 4.226025
+  colMeans_median : 5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.113217
+  colMeans_skewness : -1.501952
+  colSums_entropy : 0.526573
+  colSums_gini : 0.5097706
+  colSums_kurtosis : 1562.923
+  colSums_max : 1760
+  colSums_mean : 9.323985
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 23.74646
+  colSums_skewness : 28.54671
+  nitems : 22964
+  nratings : 50394
+  nusers : 33922
+  ratings_entropy : 0.06001943
+  ratings_gini : 0.1324502
+  ratings_kurtosis : 1.924396
+  ratings_max : 15
+  ratings_mean : 4.248839
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.219289
+  ratings_skewness : -1.441715
+  rowCounts_entropy : 0.2298688
+  rowCounts_gini : 0.2910935
+  rowCounts_kurtosis : 14573.66
+  rowCounts_max : 483
+  rowCounts_mean : 1.485585
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 3.235522
+  rowCounts_skewness : 101.6193
+  rowMeans_entropy : 0.06202522
+  rowMeans_gini : 0.1385863
+  rowMeans_kurtosis : 1.432258
+  rowMeans_max : 13
+  rowMeans_mean : 4.19757
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.223921
+  rowMeans_skewness : -1.456523
+  rowSums_entropy : 0.2970126
+  rowSums_gini : 0.3688244
+  rowSums_kurtosis : 13854.86
+  rowSums_max : 2105
+  rowSums_mean : 6.31201
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 14.28553
+  rowSums_skewness : 98.14788
+  sparsity : 0.9999353
+<hash> containing 3 key-value pair(s).
+  entropy : 2.976889
+  gini : 0.9684221
+  sparsity : 0.9999353
+<hash> containing 6 key-value pair(s).
+  density : 6.469189e-05
+  item.count.gini : 0.473028
+  item.count.skewness : 25.58221
+  user.count.gini : 0.2910935
+  user.count.skewness : 101.6193
+  variance : 1.486666
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.194478
+  item.entropy.mean : 0.003385758
+  item.mean.mean : 4.226025
+  user.TFIDF.mean : 1.279
+  user.average_similarity.mean : 0.1443321
+  user.clustering_coefficient.mean : 0.7740558
+  user.count.mean : 1.485585
+  user.mean.mean : 4.19757
+  user.number_neighbours.mean : 0.542
+  user.standard_deviation.mean : 0.660827
+  user_coratings.jaccard.mean : 0.0003709115
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.485585
+  user.mean.mean : 0.0002748654
+  user.variance.mean : 1.152795
+[1] "amazon-kindle.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.4683715
+  colCounts_gini : 0.4794989
+  colCounts_kurtosis : 12189.78
+  colCounts_max : 1196
+  colCounts_mean : 2.350162
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 6.648971
+  colCounts_skewness : 81.21592
+  colMeans_entropy : 0.04407867
+  colMeans_gini : 0.1241729
+  colMeans_kurtosis : 1.862054
+  colMeans_max : 5
+  colMeans_mean : 4.203657
+  colMeans_median : 4.571429
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.054517
+  colMeans_skewness : -1.55557
+  colSums_entropy : 0.5038976
+  colSums_gini : 0.5104007
+  colSums_kurtosis : 13361.06
+  colSums_max : 5139
+  colSums_mean : 9.921287
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 28.70164
+  colSums_skewness : 86.24334
+  nitems : 131122
+  nratings : 308158
+  nusers : 137107
+  ratings_entropy : 0.05150785
+  ratings_gini : 0.1289154
+  ratings_kurtosis : 1.425475
+  ratings_max : 5
+  ratings_mean : 4.221532
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.136517
+  ratings_skewness : -1.514207
+  rowCounts_entropy : 0.5650393
+  rowCounts_gini : 0.4960686
+  rowCounts_kurtosis : 3534.569
+  rowCounts_max : 898
+  rowCounts_mean : 2.247573
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 8.27415
+  rowCounts_skewness : 45.8415
+  rowMeans_entropy : 0.05484621
+  rowMeans_gini : 0.1357088
+  rowMeans_kurtosis : 1.250745
+  rowMeans_max : 5
+  rowMeans_mean : 4.175946
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.15821
+  rowMeans_skewness : -1.475438
+  rowSums_entropy : 0.6187918
+  rowSums_gini : 0.5387272
+  rowSums_kurtosis : 3764.903
+  rowSums_max : 3921
+  rowSums_mean : 9.488203
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 36.29606
+  rowSums_skewness : 47.36274
+  sparsity : 0.9999829
+<hash> containing 3 key-value pair(s).
+  entropy : 3.318194
+  gini : 0.9859638
+  sparsity : 0.9999829
+<hash> containing 6 key-value pair(s).
+  density : 1.714108e-05
+  item.count.gini : 0.4794989
+  item.count.skewness : 81.21592
+  user.count.gini : 0.4960686
+  user.count.skewness : 45.8415
+  variance : 1.291672
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.350162
+  item.entropy.mean : 0.0008716165
+  item.mean.mean : 4.203657
+  user.TFIDF.mean : 2.773
+  user.average_similarity.mean : 0.1190218
+  user.clustering_coefficient.mean : 0.5553962
+  user.count.mean : 2.247573
+  user.mean.mean : 4.175946
+  user.number_neighbours.mean : 0.284
+  user.standard_deviation.mean : 0.639485
+  user_coratings.jaccard.mean : 0.0001041213
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 2.247573
+  user.mean.mean : 7.236164e-05
+  user.variance.mean : 0.9441957
+[1] "amazon-movies.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7000831
+  colCounts_gini : 0.6267992
+  colCounts_kurtosis : 21.66289
+  colCounts_max : 93
+  colCounts_mean : 6.072009
+  colCounts_median : 2
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 10.29419
+  colCounts_skewness : 4.097998
+  colMeans_entropy : 0.04706541
+  colMeans_gini : 0.1414042
+  colMeans_kurtosis : 2.217829
+  colMeans_max : 10
+  colMeans_mean : 4.0246
+  colMeans_median : 4.222222
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.087501
+  colMeans_skewness : -0.7842444
+  colSums_entropy : 0.739861
+  colSums_gini : 0.641232
+  colSums_kurtosis : 24.90538
+  colSums_max : 440
+  colSums_mean : 24.85111
+  colSums_median : 10
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 43.42992
+  colSums_skewness : 4.322029
+  nitems : 1847
+  nratings : 11215
+  nusers : 7278
+  ratings_entropy : 0.07364339
+  ratings_gini : 0.1628376
+  ratings_kurtosis : 2.274168
+  ratings_max : 15
+  ratings_mean : 4.092733
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.357182
+  ratings_skewness : -0.5745961
+  rowCounts_entropy : 0.2987742
+  rowCounts_gini : 0.320322
+  rowCounts_kurtosis : 794.3558
+  rowCounts_max : 144
+  rowCounts_mean : 1.540945
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 3.220052
+  rowCounts_skewness : 23.34602
+  rowMeans_entropy : 0.06921043
+  rowMeans_gini : 0.1514084
+  rowMeans_kurtosis : 1.846466
+  rowMeans_max : 13
+  rowMeans_mean : 4.152908
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.304164
+  rowMeans_skewness : -0.9910297
+  rowSums_entropy : 0.3409519
+  rowSums_gini : 0.3825905
+  rowSums_kurtosis : 738.8264
+  rowSums_max : 545
+  rowSums_mean : 6.306678
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 12.56069
+  rowSums_skewness : 22.0728
+  sparsity : 0.9991657
+<hash> containing 3 key-value pair(s).
+  entropy : 1.856222
+  gini : 0.8809864
+  sparsity : 0.9991657
+<hash> containing 6 key-value pair(s).
+  density : 0.0008342963
+  item.count.gini : 0.6267992
+  item.count.skewness : 4.097998
+  user.count.gini : 0.320322
+  user.count.skewness : 23.34602
+  variance : 1.841944
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 6.072009
+  item.entropy.mean : 0.02335358
+  item.mean.mean : 4.0246
+  user.TFIDF.mean : 0.79
+  user.average_similarity.mean : 0.3644897
+  user.clustering_coefficient.mean : 0.7836508
+  user.count.mean : 1.540945
+  user.mean.mean : 4.152908
+  user.number_neighbours.mean : 4.31
+  user.standard_deviation.mean : 0.6080794
+  user_coratings.jaccard.mean : 0.002344732
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.540945
+  user.mean.mean : 0.003414552
+  user.variance.mean : 0.9252424
+[1] "amazon-office.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.6531122
+  colCounts_gini : 0.5784459
+  colCounts_kurtosis : 457.6203
+  colCounts_max : 412
+  colCounts_mean : 3.163349
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 7.762564
+  colCounts_skewness : 15.40569
+  colMeans_entropy : 0.06867518
+  colMeans_gini : 0.1626788
+  colMeans_kurtosis : 0.4282917
+  colMeans_max : 14
+  colMeans_mean : 3.985445
+  colMeans_median : 4.5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.25419
+  colMeans_skewness : -1.117466
+  colSums_entropy : 0.6996904
+  colSums_gini : 0.6048749
+  colSums_kurtosis : 539.2418
+  colSums_max : 1812
+  colSums_mean : 12.59155
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 32.02814
+  colSums_skewness : 16.60363
+  nitems : 39229
+  nratings : 124095
+  nusers : 90932
+  ratings_entropy : 0.09299252
+  ratings_gini : 0.1786344
+  ratings_kurtosis : 0.2008986
+  ratings_max : 15
+  ratings_mean : 3.98045
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.434054
+  ratings_skewness : -1.029313
+  rowCounts_entropy : 0.1637289
+  rowCounts_gini : 0.2379367
+  rowCounts_kurtosis : 443.6864
+  rowCounts_max : 79
+  rowCounts_mean : 1.364701
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.442068
+  rowCounts_skewness : 15.56475
+  rowMeans_entropy : 0.09542109
+  rowMeans_gini : 0.187058
+  rowMeans_kurtosis : -0.2295109
+  rowMeans_max : 13
+  rowMeans_mean : 3.904247
+  rowMeans_median : 4.75
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.43142
+  rowMeans_skewness : -1.007815
+  rowSums_entropy : 0.2715836
+  rowSums_gini : 0.3600406
+  rowSums_kurtosis : 395.4502
+  rowSums_max : 368
+  rowSums_mean : 5.432125
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 6.537174
+  rowSums_skewness : 14.13544
+  sparsity : 0.9999652
+<hash> containing 3 key-value pair(s).
+  entropy : 2.963248
+  gini : 0.9704897
+  sparsity : 0.9999652
+<hash> containing 6 key-value pair(s).
+  density : 3.478807e-05
+  item.count.gini : 0.5784459
+  item.count.skewness : 15.40569
+  user.count.gini : 0.2379367
+  user.count.skewness : 15.56475
+  variance : 2.05651
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 3.163349
+  item.entropy.mean : 0.006173116
+  item.mean.mean : 3.985445
+  user.TFIDF.mean : 1.219
+  user.average_similarity.mean : 0.1255913
+  user.clustering_coefficient.mean : 0.3635886
+  user.count.mean : 1.364701
+  user.mean.mean : 3.904247
+  user.number_neighbours.mean : 0.332
+  user.standard_deviation.mean : 0.7925738
+  user_coratings.jaccard.mean : 0.0002047195
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.364701
+  user.mean.mean : 0.0001384722
+  user.variance.mean : 1.085066
+[1] "amazon-pet-supplies.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7402856
+  colCounts_gini : 0.6141755
+  colCounts_kurtosis : 316.7048
+  colCounts_max : 421
+  colCounts_mean : 3.640435
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 10.14275
+  colCounts_skewness : 14.02926
+  colMeans_entropy : 0.05835208
+  colMeans_gini : 0.1472419
+  colMeans_kurtosis : 1.488591
+  colMeans_max : 18
+  colMeans_mean : 4.084186
+  colMeans_median : 4.5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.185576
+  colMeans_skewness : -1.186733
+  colSums_entropy : 0.7881113
+  colSums_gini : 0.6381586
+  colSums_kurtosis : 363.7957
+  colSums_max : 1961
+  colSums_mean : 15.03261
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 43.44592
+  colSums_skewness : 14.94843
+  nitems : 33852
+  nratings : 123236
+  nusers : 74099
+  ratings_entropy : 0.07744296
+  ratings_gini : 0.1570972
+  ratings_kurtosis : 134.9232
+  ratings_max : 90
+  ratings_mean : 4.129345
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.394319
+  ratings_skewness : 1.553322
+  rowCounts_entropy : 0.2567858
+  rowCounts_gini : 0.3390166
+  rowCounts_kurtosis : 573.4649
+  rowCounts_max : 136
+  rowCounts_mean : 1.663126
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.124156
+  rowCounts_skewness : 15.53004
+  rowMeans_entropy : 0.0738967
+  rowMeans_gini : 0.158995
+  rowMeans_kurtosis : 0.6566979
+  rowMeans_max : 15
+  rowMeans_mean : 4.075526
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.310126
+  rowMeans_skewness : -1.202578
+  rowSums_entropy : 0.3326458
+  rowSums_gini : 0.4115572
+  rowSums_kurtosis : 1783.183
+  rowSums_max : 996
+  rowSums_mean : 6.867623
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 9.735409
+  rowSums_skewness : 24.87165
+  sparsity : 0.9999509
+<hash> containing 3 key-value pair(s).
+  entropy : 2.988013
+  gini : 0.9753039
+  sparsity : 0.9999509
+<hash> containing 6 key-value pair(s).
+  density : 4.912934e-05
+  item.count.gini : 0.6141755
+  item.count.skewness : 14.02926
+  user.count.gini : 0.3390166
+  user.count.skewness : 15.53004
+  variance : 1.944125
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 3.640435
+  item.entropy.mean : 0.00549491
+  item.mean.mean : 4.084186
+  user.TFIDF.mean : 1.394
+  user.average_similarity.mean : 0.1417349
+  user.clustering_coefficient.mean : 0.8148697
+  user.count.mean : 1.663126
+  user.mean.mean : 4.075526
+  user.number_neighbours.mean : 0.644
+  user.standard_deviation.mean : 0.7567692
+  user_coratings.jaccard.mean : 0.0002981747
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.663126
+  user.mean.mean : 0.000202872
+  user.variance.mean : 1.562579
+[1] "amazon-phones.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.8696546
+  colCounts_gini : 0.648415
+  colCounts_kurtosis : 2904.316
+  colCounts_max : 1900
+  colCounts_mean : 3.782329
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 15.95548
+  colCounts_skewness : 37.68763
+  colMeans_entropy : 0.0858676
+  colMeans_gini : 0.1957077
+  colMeans_kurtosis : 48.44661
+  colMeans_max : 65.5
+  colMeans_mean : 3.701484
+  colMeans_median : 4
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.34335
+  colMeans_skewness : 0.3157262
+  colSums_entropy : 0.9543299
+  colSums_gini : 0.6863232
+  colSums_kurtosis : 3264.67
+  colSums_max : 8073
+  colSums_mean : 14.43766
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 65.76732
+  colSums_skewness : 40.43568
+  nitems : 91289
+  nratings : 345285
+  nusers : 226105
+  ratings_entropy : 0.1050713
+  ratings_gini : 0.2015366
+  ratings_kurtosis : 144.0641
+  ratings_max : 130
+  ratings_mean : 3.817137
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.502025
+  ratings_skewness : 0.9539937
+  rowCounts_entropy : 0.1869355
+  rowCounts_gini : 0.2885341
+  rowCounts_kurtosis : 604.7726
+  rowCounts_max : 134
+  rowCounts_mean : 1.5271
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.450888
+  rowCounts_skewness : 13.1365
+  rowMeans_entropy : 0.102643
+  rowMeans_gini : 0.2064284
+  rowMeans_kurtosis : 239.5542
+  rowMeans_max : 130
+  rowMeans_mean : 3.735712
+  rowMeans_median : 4
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.470716
+  rowMeans_skewness : 2.054431
+  rowSums_entropy : 0.2990432
+  rowSums_gini : 0.3983938
+  rowSums_kurtosis : 846.254
+  rowSums_max : 679
+  rowSums_mean : 5.82915
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 6.459873
+  rowSums_skewness : 14.65864
+  sparsity : 0.9999833
+<hash> containing 3 key-value pair(s).
+  entropy : 2.810621
+  gini : 0.9597581
+  sparsity : 0.9999833
+<hash> containing 6 key-value pair(s).
+  density : 1.67282e-05
+  item.count.gini : 0.648415
+  item.count.skewness : 37.68763
+  user.count.gini : 0.2885341
+  user.count.skewness : 13.1365
+  variance : 2.256079
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 3.782329
+  item.entropy.mean : 0.004658439
+  item.mean.mean : 3.701484
+  user.TFIDF.mean : 1.475
+  user.average_similarity.mean : 0.1343787
+  user.clustering_coefficient.mean : 0.8471655
+  user.count.mean : 1.5271
+  user.mean.mean : 3.735712
+  user.number_neighbours.mean : 0.498
+  user.standard_deviation.mean : 0.8894122
+  user_coratings.jaccard.mean : 0.000234439
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.5271
+  user.mean.mean : 6.385381e-05
+  user.variance.mean : 1.854146
+[1] "amazon-sports.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.5577621
+  colCounts_gini : 0.523485
+  colCounts_kurtosis : 1336.309
+  colCounts_max : 621
+  colCounts_mean : 2.561832
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 6.236723
+  colCounts_skewness : 23.89908
+  colMeans_entropy : 0.05366298
+  colMeans_gini : 0.1378337
+  colMeans_kurtosis : 1.261527
+  colMeans_max : 10
+  colMeans_mean : 4.142847
+  colMeans_median : 4.625
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.144769
+  colMeans_skewness : -1.394279
+  colSums_entropy : 0.6049857
+  colSums_gini : 0.557148
+  colSums_kurtosis : 1086.122
+  colSums_max : 2286
+  colSums_mean : 10.70156
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 26.58798
+  colSums_skewness : 22.25431
+  nitems : 127620
+  nratings : 326941
+  nusers : 199052
+  ratings_entropy : 0.06444113
+  ratings_gini : 0.142387
+  ratings_kurtosis : 1.2764
+  ratings_max : 15
+  ratings_mean : 4.177307
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.249308
+  ratings_skewness : -1.343679
+  rowCounts_entropy : 0.2543909
+  rowCounts_gini : 0.3345392
+  rowCounts_kurtosis : 290.4559
+  rowCounts_max : 117
+  rowCounts_mean : 1.64249
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.051807
+  rowCounts_skewness : 11.73944
+  rowMeans_entropy : 0.06564545
+  rowMeans_gini : 0.1496579
+  rowMeans_kurtosis : 0.8713454
+  rowMeans_max : 14
+  rowMeans_mean : 4.104213
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.242245
+  rowMeans_skewness : -1.326056
+  rowSums_entropy : 0.3282639
+  rowSums_gini : 0.4082288
+  rowSums_kurtosis : 293.4895
+  rowSums_max : 568
+  rowSums_mean : 6.861187
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 9.215275
+  rowSums_skewness : 11.62569
+  sparsity : 0.9999871
+<hash> containing 3 key-value pair(s).
+  entropy : 3.186304
+  gini : 0.9740921
+  sparsity : 0.9999871
+<hash> containing 6 key-value pair(s).
+  density : 1.287016e-05
+  item.count.gini : 0.523485
+  item.count.skewness : 23.89908
+  user.count.gini : 0.3345392
+  user.count.skewness : 11.73944
+  variance : 1.560772
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.561832
+  item.entropy.mean : 0.001861873
+  item.mean.mean : 4.142847
+  user.TFIDF.mean : 1.548
+  user.average_similarity.mean : 0.1109042
+  user.clustering_coefficient.mean : 0.9076087
+  user.count.mean : 1.64249
+  user.mean.mean : 4.104213
+  user.number_neighbours.mean : 0.14
+  user.standard_deviation.mean : 0.6855088
+  user_coratings.jaccard.mean : 7.008248e-05
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.64249
+  user.mean.mean : 5.376263e-05
+  user.variance.mean : 1.178917
+[1] "amazon-tools.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.5503289
+  colCounts_gini : 0.5233705
+  colCounts_kurtosis : 840.4027
+  colCounts_max : 474
+  colCounts_mean : 2.603876
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 6.0938
+  colCounts_skewness : 19.79881
+  colMeans_entropy : 0.06033468
+  colMeans_gini : 0.146577
+  colMeans_kurtosis : 0.9356967
+  colMeans_max : 10
+  colMeans_mean : 4.098738
+  colMeans_median : 4.6
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.197235
+  colMeans_skewness : -1.329043
+  colSums_entropy : 0.6038643
+  colSums_gini : 0.5595011
+  colSums_kurtosis : 890.3146
+  colSums_max : 2075
+  colSums_mean : 10.78842
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 25.84836
+  colSums_skewness : 20.06345
+  nitems : 73742
+  nratings : 192015
+  nusers : 121248
+  ratings_entropy : 0.07318019
+  ratings_gini : 0.1507327
+  ratings_kurtosis : 1.119877
+  ratings_max : 20
+  ratings_mean : 4.143218
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.313153
+  ratings_skewness : -1.289854
+  rowCounts_entropy : 0.2364387
+  rowCounts_gini : 0.3172871
+  rowCounts_kurtosis : 413.5275
+  rowCounts_max : 109
+  rowCounts_mean : 1.583655
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.95126
+  rowCounts_skewness : 14.04418
+  rowMeans_entropy : 0.07428025
+  rowMeans_gini : 0.1584958
+  rowMeans_kurtosis : 0.8085204
+  rowMeans_max : 20
+  rowMeans_mean : 4.070532
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.30693
+  rowMeans_skewness : -1.236213
+  rowSums_entropy : 0.3187929
+  rowSums_gini : 0.3994667
+  rowSums_kurtosis : 377.295
+  rowSums_max : 478
+  rowSums_mean : 6.561428
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 8.753356
+  rowSums_skewness : 13.34378
+  sparsity : 0.9999785
+<hash> containing 3 key-value pair(s).
+  entropy : NaN
+  gini : NaN
+  sparsity : 0.9999785
+<hash> containing 6 key-value pair(s).
+  density : 2.147562e-05
+  item.count.gini : 0.5233705
+  item.count.skewness : 19.79881
+  user.count.gini : 0.3172871
+  user.count.skewness : 14.04418
+  variance : 1.724372
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.603876
+  item.entropy.mean : 0.001891261
+  item.mean.mean : 4.098738
+  user.TFIDF.mean : 1.427
+  user.average_similarity.mean : 0.11365
+  user.clustering_coefficient.mean : 0.5898438
+  user.count.mean : 1.583655
+  user.mean.mean : 4.070532
+  user.number_neighbours.mean : 0.178
+  user.standard_deviation.mean : 0.662943
+  user_coratings.jaccard.mean : 8.813149e-05
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.583655
+  user.mean.mean : 8.897816e-05
+  user.variance.mean : 1.29041
+[1] "amazon-toys.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.4899993
+  colCounts_gini : 0.4910962
+  colCounts_kurtosis : 9557.501
+  colCounts_max : 1026
+  colCounts_mean : 2.385669
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 5.942739
+  colCounts_skewness : 63.44869
+  colMeans_entropy : 0.05845124
+  colMeans_gini : 0.1440368
+  colMeans_kurtosis : 1.031475
+  colMeans_max : 15
+  colMeans_mean : 4.113819
+  colMeans_median : 4.666667
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.184234
+  colMeans_skewness : -1.345419
+  colSums_entropy : 0.5442827
+  colSums_gini : 0.5293448
+  colSums_kurtosis : 13335.64
+  colSums_max : 5048
+  colSums_mean : 9.896769
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 26.83495
+  colSums_skewness : 78.20584
+  nitems : 94594
+  nratings : 225670
+  nusers : 134291
+  ratings_entropy : 0.07030115
+  ratings_gini : 0.1486317
+  ratings_kurtosis : 5.650239
+  ratings_max : 45
+  ratings_mean : 4.148425
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.294214
+  ratings_skewness : -1.155036
+  rowCounts_entropy : 0.2783601
+  rowCounts_gini : 0.3478502
+  rowCounts_kurtosis : 4503.78
+  rowCounts_max : 407
+  rowCounts_mean : 1.680455
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 2.764225
+  rowCounts_skewness : 43.18869
+  rowMeans_entropy : 0.07555513
+  rowMeans_gini : 0.1615669
+  rowMeans_kurtosis : 0.4377804
+  rowMeans_max : 10
+  rowMeans_mean : 4.044956
+  rowMeans_median : 5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.311261
+  rowMeans_skewness : -1.237594
+  rowSums_entropy : 0.3678647
+  rowSums_gini : 0.4308363
+  rowSums_kurtosis : 5317.153
+  rowSums_max : 1930
+  rowSums_mean : 6.971242
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 12.55407
+  rowSums_skewness : 47.20409
+  sparsity : 0.9999822
+<hash> containing 3 key-value pair(s).
+  entropy : 3.220084
+  gini : 0.9770462
+  sparsity : 0.9999822
+<hash> containing 6 key-value pair(s).
+  density : 1.776492e-05
+  item.count.gini : 0.4910962
+  item.count.skewness : 63.44869
+  user.count.gini : 0.3478502
+  user.count.skewness : 43.18869
+  variance : 1.674991
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 2.385669
+  item.entropy.mean : 0.002055621
+  item.mean.mean : 4.113819
+  user.TFIDF.mean : 1.522
+  user.average_similarity.mean : 0.1161695
+  user.clustering_coefficient.mean : 0.6504563
+  user.count.mean : 1.680455
+  user.mean.mean : 4.044956
+  user.number_neighbours.mean : 0.2
+  user.standard_deviation.mean : 0.6636482
+  user_coratings.jaccard.mean : 0.000110938
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.680455
+  user.mean.mean : 7.369645e-05
+  user.variance.mean : 1.13301
+[1] "bookcrossing.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.1763747
+  colCounts_gini : 0.238213
+  colCounts_kurtosis : 328.4013
+  colCounts_max : 63
+  colCounts_mean : 1.352521
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 1.470313
+  colCounts_skewness : 13.09438
+  colMeans_entropy : 0.01932166
+  colMeans_gini : 0.09246971
+  colMeans_kurtosis : 0.727744
+  colMeans_max : 5
+  colMeans_mean : 4.363689
+  colMeans_median : 5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 0.7938359
+  colMeans_skewness : -1.139124
+  colSums_entropy : 0.1998414
+  colSums_gini : 0.2951575
+  colSums_kurtosis : 267.1728
+  colSums_max : 292
+  colSums_mean : 5.932956
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 6.618775
+  colSums_skewness : 11.9192
+  nitems : 29533
+  nratings : 39944
+  nusers : 7780
+  ratings_entropy : 0.02061496
+  ratings_gini : 0.09235359
+  ratings_kurtosis : 0.7800035
+  ratings_max : 5
+  ratings_mean : 4.386591
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 0.8193981
+  ratings_skewness : -1.19256
+  rowCounts_entropy : 1.022312
+  rowCounts_gini : 0.7103178
+  rowCounts_kurtosis : 758.3835
+  rowCounts_max : 911
+  rowCounts_mean : 5.13419
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 18.79655
+  rowCounts_skewness : 20.14714
+  rowMeans_entropy : 0.01699324
+  rowMeans_gini : 0.08947589
+  rowMeans_kurtosis : 1.320455
+  rowMeans_max : 5
+  rowMeans_mean : 4.3309
+  rowMeans_median : 4.5
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 0.7391574
+  rowMeans_skewness : -1.167886
+  rowSums_entropy : 1.04775
+  rowSums_gini : 0.7217498
+  rowSums_kurtosis : 966.1483
+  rowSums_max : 4473
+  rowSums_mean : 22.52159
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 86.36282
+  rowSums_skewness : 22.90308
+  sparsity : 0.9998262
+<hash> containing 3 key-value pair(s).
+  entropy : 2.985972
+  gini : 0.9770175
+  sparsity : 0.9998262
+<hash> containing 6 key-value pair(s).
+  density : 0.0001738459
+  item.count.gini : 0.238213
+  item.count.skewness : 13.09438
+  user.count.gini : 0.7103178
+  user.count.skewness : 20.14714
+  variance : 0.6714132
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 1.352521
+  item.entropy.mean : 0.000818236
+  item.mean.mean : 4.363689
+  user.TFIDF.mean : 4.324
+  user.average_similarity.mean : 0.1220505
+  user.clustering_coefficient.mean : 0.6760159
+  user.count.mean : 5.13419
+  user.mean.mean : 4.3309
+  user.number_neighbours.mean : 0.576
+  user.standard_deviation.mean : 0.6507711
+  user_coratings.jaccard.mean : 0.0001087456
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 5.13419
+  user.mean.mean : 0.0007625908
+  user.variance.mean : 0.5468744
+[1] "flixter.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.787143
+  colCounts_gini : 0.8827907
+  colCounts_kurtosis : 68.62032
+  colCounts_max : 3385
+  colCounts_mean : 36.8843
+  colCounts_median : 2
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 138.5821
+  colCounts_skewness : 7.095398
+  colMeans_entropy : 0.02055169
+  colMeans_gini : 0.1010899
+  colMeans_kurtosis : 1.708877
+  colMeans_max : 5
+  colMeans_mean : 3.741096
+  colMeans_median : 3.87037
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.7073164
+  colMeans_skewness : -0.6460766
+  colSums_entropy : 1.808545
+  colSums_gini : 0.8861257
+  colSums_kurtosis : 76.08465
+  colSums_max : 13224
+  colSums_mean : 140.8594
+  colSums_median : 8
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 543.6754
+  colSums_skewness : 7.452297
+  nitems : 22040
+  nratings : 812930
+  nusers : 14761
+  ratings_entropy : 0.04802828
+  ratings_gini : 0.1490265
+  ratings_kurtosis : 0.06495404
+  ratings_max : 5
+  ratings_mean : 3.818954
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.061749
+  ratings_skewness : -0.7572723
+  rowCounts_entropy : 1.641054
+  rowCounts_gini : 0.8596064
+  rowCounts_kurtosis : 126.119
+  rowCounts_max : 5013
+  rowCounts_mean : 55.07283
+  rowCounts_median : 4
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 185.2607
+  rowCounts_skewness : 8.483629
+  rowMeans_entropy : 0.03715946
+  rowMeans_gini : 0.1319989
+  rowMeans_kurtosis : 0.841578
+  rowMeans_max : 5
+  rowMeans_mean : 3.916062
+  rowMeans_median : 4
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 0.9519546
+  rowMeans_skewness : -1.010586
+  rowSums_entropy : 1.62694
+  rowSums_gini : 0.8565896
+  rowSums_kurtosis : 131.5415
+  rowSums_max : 17840
+  rowSums_mean : 210.3206
+  rowSums_median : 15
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 694.5183
+  rowSums_skewness : 8.606732
+  sparsity : 0.9975012
+<hash> containing 3 key-value pair(s).
+  entropy : 0.8498505
+  gini : 0.6547433
+  sparsity : 0.9975012
+<hash> containing 6 key-value pair(s).
+  density : 0.002498767
+  item.count.gini : 0.8827907
+  item.count.skewness : 7.095398
+  user.count.gini : 0.8596064
+  user.count.skewness : 8.483629
+  variance : 1.127311
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 36.8843
+  item.entropy.mean : 0.01249253
+  item.mean.mean : 3.741096
+  user.TFIDF.mean : 10.943
+  user.average_similarity.mean : 0.5131
+  user.clustering_coefficient.mean : 0.1527811
+  user.count.mean : 55.07283
+  user.mean.mean : 3.916062
+  user.number_neighbours.mean : 97.562
+  user.standard_deviation.mean : 0.7546386
+  user_coratings.jaccard.mean : 0.01872116
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 55.07283
+  user.mean.mean : 0.009542676
+  user.variance.mean : 0.8088398
+[1] "jester1.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.0684835
+  colCounts_gini : 0.1930232
+  colCounts_kurtosis : -1.48259
+  colCounts_max : 2498
+  colCounts_mean : 1815.6
+  colCounts_median : 2001.5
+  colCounts_min : 860
+  colCounts_mode : 2498
+  colCounts_sd : 631.9734
+  colCounts_skewness : -0.3656804
+  colMeans_entropy : 0.00727738
+  colMeans_gini : 0.06681444
+  colMeans_kurtosis : -0.2384046
+  colMeans_max : 3.903122
+  colMeans_mean : 3.201533
+  colMeans_median : 3.236498
+  colMeans_min : 2.069031
+  colMeans_mode : 3.236178
+  colMeans_sd : 0.3805932
+  colMeans_skewness : -0.4348132
+  colSums_entropy : 0.08101846
+  colSums_gini : 0.2239959
+  colSums_kurtosis : -1.403015
+  colSums_max : 9750
+  colSums_mean : 5837.59
+  colSums_median : 5787
+  colSums_min : 2242
+  colSums_mode : 2893
+  colSums_sd : 2290.534
+  colSums_skewness : 0.1049777
+  nitems : 100
+  nratings : 181560
+  nusers : 2498
+  ratings_entropy : 0.1003496
+  ratings_gini : 0.22772
+  ratings_kurtosis : -1.004234
+  ratings_max : 5
+  ratings_mean : 3.21524
+  ratings_median : 3
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.306658
+  ratings_skewness : -0.2737347
+  rowCounts_entropy : 0.04790109
+  rowCounts_gini : 0.1695158
+  rowCounts_kurtosis : -1.288673
+  rowCounts_max : 100
+  rowCounts_mean : 72.68215
+  rowCounts_median : 72
+  rowCounts_min : 36
+  rowCounts_mode : 100
+  rowCounts_sd : 21.76556
+  rowCounts_skewness : -0.08258002
+  rowMeans_entropy : 0.02050194
+  rowMeans_gini : 0.1089762
+  rowMeans_kurtosis : 0.3453967
+  rowMeans_max : 5
+  rowMeans_mean : 3.215527
+  rowMeans_median : 3.23
+  rowMeans_min : 1.013158
+  rowMeans_mode : 3
+  rowMeans_sd : 0.6274182
+  rowMeans_skewness : -0.2663335
+  rowSums_entropy : 0.06822626
+  rowSums_gini : 0.2070618
+  rowSums_kurtosis : -0.5293056
+  rowSums_max : 500
+  rowSums_mean : 233.6906
+  rowSums_median : 226
+  rowSums_min : 37
+  rowSums_mode : 174
+  rowSums_sd : 85.00566
+  rowSums_skewness : 0.3730536
+  sparsity : 0.2731785
+<hash> containing 3 key-value pair(s).
+  entropy : 0.04063502
+  gini : 0.1635746
+  sparsity : 0.2731785
+<hash> containing 6 key-value pair(s).
+  density : 0.7268215
+  item.count.gini : 0.1930232
+  item.count.skewness : -0.3656804
+  user.count.gini : 0.1695158
+  user.count.skewness : -0.08258002
+  variance : 1.707355
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 1815.6
+  item.entropy.mean : 0.09565005
+  item.mean.mean : 3.201533
+  user.TFIDF.mean : 0.1
+  user.average_similarity.mean : 0.6695222
+  user.clustering_coefficient.mean : 0.004157647
+  user.count.mean : 72.68215
+  user.mean.mean : 3.215527
+  user.number_neighbours.mean : 783.676
+  user.standard_deviation.mean : 1.111913
+  user_coratings.jaccard.mean : 0.6885248
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 72.68215
+  user.mean.mean : 2.336906
+  user.variance.mean : 1.335089
+[1] "jester2.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.07132042
+  colCounts_gini : 0.1968602
+  colCounts_kurtosis : -1.485734
+  colCounts_max : 2350
+  colCounts_mean : 1697.83
+  colCounts_median : 1865
+  colCounts_min : 788
+  colCounts_mode : 2350
+  colCounts_sd : 602.3896
+  colCounts_skewness : -0.3559321
+  colMeans_entropy : 0.006663878
+  colMeans_gini : 0.06413225
+  colMeans_kurtosis : -0.423367
+  colMeans_max : 3.821826
+  colMeans_mean : 3.175154
+  colMeans_median : 3.232132
+  colMeans_min : 2.141988
+  colMeans_mode : 3.235984
+  colMeans_sd : 0.3616054
+  colMeans_skewness : -0.452051
+  colSums_entropy : 0.08100098
+  colSums_gini : 0.2237137
+  colSums_kurtosis : -1.417277
+  colSums_max : 8953
+  colSums_mean : 5400.72
+  colSums_median : 5482
+  colSums_min : 2139
+  colSums_mode : 4964
+  colSums_sd : 2115.334
+  colSums_skewness : 0.08638919
+  nitems : 100
+  nratings : 169783
+  nusers : 2350
+  ratings_entropy : 0.1056415
+  ratings_gini : 0.2346282
+  ratings_kurtosis : -1.064274
+  ratings_max : 5
+  ratings_mean : 3.180955
+  ratings_median : 3
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.328955
+  ratings_skewness : -0.238666
+  rowCounts_entropy : 0.04832968
+  rowCounts_gini : 0.170621
+  rowCounts_kurtosis : -1.276281
+  rowCounts_max : 100
+  rowCounts_mean : 72.24809
+  rowCounts_median : 72
+  rowCounts_min : 36
+  rowCounts_mode : 100
+  rowCounts_sd : 21.75296
+  rowCounts_skewness : -0.06505775
+  rowMeans_entropy : 0.02444241
+  rowMeans_gini : 0.1187034
+  rowMeans_kurtosis : 0.1732943
+  rowMeans_max : 5
+  rowMeans_mean : 3.178041
+  rowMeans_median : 3.210263
+  rowMeans_min : 1
+  rowMeans_mode : 3
+  rowMeans_sd : 0.6733446
+  rowMeans_skewness : -0.2915327
+  rowSums_entropy : 0.07359246
+  rowSums_gini : 0.2150849
+  rowSums_kurtosis : -0.5376992
+  rowSums_max : 500
+  rowSums_mean : 229.8179
+  rowSums_median : 220
+  rowSums_min : 44
+  rowSums_mode : 203
+  rowSums_sd : 86.96081
+  rowSums_skewness : 0.4117025
+  sparsity : 0.2775191
+<hash> containing 3 key-value pair(s).
+  entropy : 0.0393661
+  gini : 0.1609657
+  sparsity : 0.2775191
+<hash> containing 6 key-value pair(s).
+  density : 0.7224809
+  item.count.gini : 0.1968602
+  item.count.skewness : -0.3559321
+  user.count.gini : 0.170621
+  user.count.skewness : -0.06505775
+  variance : 1.766121
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 1697.83
+  item.entropy.mean : 0.09959449
+  item.mean.mean : 3.175154
+  user.TFIDF.mean : 0.1
+  user.average_similarity.mean : NA
+  user.clustering_coefficient.mean : 0.004041706
+  user.count.mean : 72.24809
+  user.mean.mean : 3.178041
+  user.number_neighbours.mean : 797.005
+  user.standard_deviation.mean : 1.108803
+  user_coratings.jaccard.mean : 0.6892799
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 72.24809
+  user.mean.mean : 2.298179
+  user.variance.mean : 1.368708
+[1] "jester3.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7247247
+  colCounts_gini : 0.6025059
+  colCounts_kurtosis : 0.2805658
+  colCounts_max : 2493
+  colCounts_mean : 643.4375
+  colCounts_median : 202
+  colCounts_min : 1
+  colCounts_mode : 2493
+  colCounts_sd : 819.8727
+  colCounts_skewness : 1.361701
+  colMeans_entropy : 0.01529299
+  colMeans_gini : 0.08698172
+  colMeans_kurtosis : 2.408495
+  colMeans_max : 4.2
+  colMeans_mean : 3.056133
+  colMeans_median : 3.119183
+  colMeans_min : 1
+  colMeans_mode : 3
+  colMeans_sd : 0.4977953
+  colMeans_skewness : -1.07886
+  colSums_entropy : 0.725627
+  colSums_gini : 0.6010411
+  colSums_kurtosis : -0.1234331
+  colSums_max : 8143
+  colSums_mean : 1981.281
+  colSums_median : 629
+  colSums_min : 2
+  colSums_mode : 2
+  colSums_sd : 2468.92
+  colSums_skewness : 1.230647
+  nitems : 96
+  nratings : 61770
+  nusers : 2493
+  ratings_entropy : 0.116231
+  ratings_gini : 0.2484636
+  ratings_kurtosis : -1.162724
+  ratings_max : 5
+  ratings_mean : 3.079213
+  ratings_median : 3
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.357876
+  ratings_skewness : -0.1563683
+  rowCounts_entropy : 0.02678795
+  rowCounts_gini : 0.1323256
+  rowCounts_kurtosis : -1.131684
+  rowCounts_max : 35
+  rowCounts_mean : 24.77738
+  rowCounts_median : 25
+  rowCounts_min : 16
+  rowCounts_mode : 25
+  rowCounts_sd : 5.697126
+  rowCounts_skewness : 0.1491104
+  rowMeans_entropy : 0.02644145
+  rowMeans_gini : 0.1227578
+  rowMeans_kurtosis : 0.09739081
+  rowMeans_max : 4.944444
+  rowMeans_mean : 3.052524
+  rowMeans_median : 3.088235
+  rowMeans_min : 1
+  rowMeans_mode : 3
+  rowMeans_sd : 0.6680482
+  rowMeans_skewness : -0.3802441
+  rowSums_entropy : 0.06094948
+  rowSums_gini : 0.1943842
+  rowSums_kurtosis : -0.4900416
+  rowSums_max : 149
+  rowSums_mean : 76.29483
+  rowSums_median : 74
+  rowSums_min : 16
+  rowSums_mode : 60
+  rowSums_sd : 26.06638
+  rowSums_skewness : 0.2983578
+  sparsity : 0.7419023
+<hash> containing 3 key-value pair(s).
+  entropy : 0.03030615
+  gini : 0.141435
+  sparsity : 0.7419023
+<hash> containing 6 key-value pair(s).
+  density : 0.2580977
+  item.count.gini : 0.6025059
+  item.count.skewness : 1.361701
+  user.count.gini : 0.1323256
+  user.count.skewness : 0.1491104
+  variance : 1.843828
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 643.4375
+  item.entropy.mean : 0.1012733
+  item.mean.mean : 3.056133
+  user.TFIDF.mean : 0.094
+  user.average_similarity.mean : 0.7316522
+  user.clustering_coefficient.mean : 0.003020029
+  user.count.mean : 24.77738
+  user.mean.mean : 3.052524
+  user.number_neighbours.mean : 994.508
+  user.standard_deviation.mean : 1.173714
+  user_coratings.jaccard.mean : 0.5033974
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 24.77738
+  user.mean.mean : 0.7947378
+  user.variance.mean : 1.477366
+[1] "movielens100k.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.4793232
+  colCounts_gini : 0.5263573
+  colCounts_kurtosis : 4.919
+  colCounts_max : 57
+  colCounts_mean : 8.118968
+  colCounts_median : 5
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 8.761337
+  colCounts_skewness : 2.007382
+  colMeans_entropy : 0.03555763
+  colMeans_gini : 0.1352156
+  colMeans_kurtosis : 0.4817526
+  colMeans_max : 5
+  colMeans_mean : 3.396944
+  colMeans_median : 3.5
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.8335724
+  colMeans_skewness : -0.6179272
+  colSums_entropy : 0.5436137
+  colSums_gini : 0.5558234
+  colSums_kurtosis : 6.01898
+  colSums_max : 248
+  colSums_mean : 29.02496
+  colSums_median : 16
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 33.82616
+  colSums_skewness : 2.18988
+  nitems : 1202
+  nratings : 9759
+  nusers : 94
+  ratings_entropy : 0.0604057
+  ratings_gini : 0.1711727
+  ratings_kurtosis : -0.3724285
+  ratings_max : 5
+  ratings_mean : 3.574956
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.121668
+  ratings_skewness : -0.5560497
+  rowCounts_entropy : 0.3622491
+  rowCounts_gini : 0.4657425
+  rowCounts_kurtosis : 1.797291
+  rowCounts_max : 434
+  rowCounts_mean : 103.8191
+  rowCounts_median : 64.5
+  rowCounts_min : 20
+  rowCounts_mode : 24
+  rowCounts_sd : 94.86209
+  rowCounts_skewness : 1.450586
+  rowMeans_entropy : 0.005807771
+  rowMeans_gini : 0.05974954
+  rowMeans_kurtosis : 0.5206759
+  rowMeans_max : 4.869565
+  rowMeans_mean : 3.59415
+  rowMeans_median : 3.595455
+  rowMeans_min : 2.584821
+  rowMeans_mode : 4
+  rowMeans_sd : 0.3885048
+  rowMeans_skewness : 0.1427931
+  rowSums_entropy : 0.3614932
+  rowSums_gini : 0.4648169
+  rowSums_kurtosis : 1.7305
+  rowSums_max : 1515
+  rowSums_mean : 371.1489
+  rowSums_median : 226.5
+  rowSums_min : 66
+  rowSums_mode : 105
+  rowSums_sd : 338.063
+  rowSums_skewness : 1.442934
+  sparsity : 0.913628
+<hash> containing 3 key-value pair(s).
+  entropy : 0.5670573
+  gini : 0.5651869
+  sparsity : 0.913628
+<hash> containing 6 key-value pair(s).
+  density : 0.086372
+  item.count.gini : 0.5263573
+  item.count.skewness : 2.007382
+  user.count.gini : 0.4657425
+  user.count.skewness : 1.450586
+  variance : 1.258139
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 8.118968
+  item.entropy.mean : 0.04083243
+  item.mean.mean : 3.396944
+  user.TFIDF.mean : 12.78723
+  user.average_similarity.mean : 0.4146821
+  user.clustering_coefficient.mean : 0.074288
+  user.count.mean : 103.8191
+  user.mean.mean : 3.59415
+  user.number_neighbours.mean : 48.02128
+  user.standard_deviation.mean : 1.03415
+  user_coratings.jaccard.mean : 0.09189485
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 103.8191
+  user.mean.mean : 0.3087762
+  user.variance.mean : 1.116916
+[1] "movielens10m.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.276737
+  colCounts_gini : 0.7884387
+  colCounts_kurtosis : 40.96959
+  colCounts_max : 3482
+  colCounts_mean : 103.6437
+  colCounts_median : 17
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 260.4802
+  colCounts_skewness : 5.509971
+  colMeans_entropy : 0.02150444
+  colMeans_gini : 0.1076452
+  colMeans_kurtosis : 0.754305
+  colMeans_max : 5
+  colMeans_mean : 3.40063
+  colMeans_median : 3.5
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.6623578
+  colMeans_skewness : -0.6715438
+  colSums_entropy : 1.331222
+  colSums_gini : 0.800058
+  colSums_kurtosis : 50.06295
+  colSums_max : 14733
+  colSums_mean : 376.2227
+  colSums_median : 58
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 1001.681
+  colSums_skewness : 6.02492
+  nitems : 9814
+  nratings : 1017159
+  nusers : 6987
+  ratings_entropy : 0.05180447
+  ratings_gini : 0.1569978
+  ratings_kurtosis : -0.08243216
+  ratings_max : 5
+  ratings_mean : 3.629963
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.056254
+  ratings_skewness : -0.6047322
+  rowCounts_entropy : 0.5654785
+  rowCounts_gini : 0.5717769
+  rowCounts_kurtosis : 45.21761
+  rowCounts_max : 4165
+  rowCounts_mean : 145.5788
+  rowCounts_median : 70
+  rowCounts_min : 20
+  rowCounts_mode : 20
+  rowCounts_sd : 219.3192
+  rowCounts_skewness : 5.0795
+  rowMeans_entropy : 0.00718651
+  rowMeans_gini : 0.06462046
+  rowMeans_kurtosis : 1.37162
+  rowMeans_max : 5
+  rowMeans_mean : 3.686105
+  rowMeans_median : 3.705882
+  rowMeans_min : 1.137931
+  rowMeans_mode : 4
+  rowMeans_sd : 0.4298541
+  rowMeans_skewness : -0.5453963
+  rowSums_entropy : 0.5544911
+  rowSums_gini : 0.5667971
+  rowSums_kurtosis : 43.28911
+  rowSums_max : 15008
+  rowSums_mean : 528.4457
+  rowSums_median : 259
+  rowSums_min : 25
+  rowSums_mode : 82
+  rowSums_sd : 777.202
+  rowSums_skewness : 4.94143
+  sparsity : 0.9851662
+<hash> containing 3 key-value pair(s).
+  entropy : 0.5225784
+  gini : 0.54724
+  sparsity : 0.9851662
+<hash> containing 6 key-value pair(s).
+  density : 0.01483379
+  item.count.gini : 0.7884387
+  item.count.skewness : 5.509971
+  user.count.gini : 0.5717769
+  user.count.skewness : 5.0795
+  variance : 1.115673
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 103.6437
+  item.entropy.mean : 0.03348641
+  item.mean.mean : 3.40063
+  user.TFIDF.mean : 7.112
+  user.average_similarity.mean : 0.4332147
+  user.clustering_coefficient.mean : 0.0212492
+  user.count.mean : 145.5788
+  user.mean.mean : 3.686105
+  user.number_neighbours.mean : 423.12
+  user.standard_deviation.mean : 0.9656528
+  user_coratings.jaccard.mean : 0.05508228
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 145.5788
+  user.mean.mean : 0.05384611
+  user.variance.mean : 0.9706917
+[1] "movielens1m.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.6137266
+  colCounts_gini : 0.5812375
+  colCounts_kurtosis : 8.601949
+  colCounts_max : 351
+  colCounts_mean : 31.25577
+  colCounts_median : 17
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 39.2122
+  colCounts_skewness : 2.521059
+  colMeans_entropy : 0.027213
+  colMeans_gini : 0.1226138
+  colMeans_kurtosis : 0.2277841
+  colMeans_max : 5
+  colMeans_mean : 3.290245
+  colMeans_median : 3.360465
+  colMeans_min : 1
+  colMeans_mode : 3
+  colMeans_sd : 0.7220892
+  colMeans_skewness : -0.5321337
+  colSums_entropy : 0.6935103
+  colSums_gini : 0.61402
+  colSums_kurtosis : 12.23415
+  colSums_max : 1525
+  colSums_mean : 111.0336
+  colSums_median : 52
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 154.8764
+  colSums_skewness : 2.966391
+  nitems : 3421
+  nratings : 106926
+  nusers : 604
+  ratings_entropy : 0.06055441
+  ratings_gini : 0.1716332
+  ratings_kurtosis : -0.3683482
+  ratings_max : 5
+  ratings_mean : 3.552419
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.117203
+  ratings_skewness : -0.5371769
+  rowCounts_entropy : 0.5297797
+  rowCounts_gini : 0.5549628
+  rowCounts_kurtosis : 20.65148
+  rowCounts_max : 2314
+  rowCounts_mean : 177.0298
+  rowCounts_median : 92.5
+  rowCounts_min : 20
+  rowCounts_mode : 21
+  rowCounts_sd : 231.6964
+  rowCounts_skewness : 3.660638
+  rowMeans_entropy : 0.007226625
+  rowMeans_gini : 0.06549204
+  rowMeans_kurtosis : 0.5096446
+  rowMeans_max : 4.76
+  rowMeans_mean : 3.683868
+  rowMeans_median : 3.6875
+  rowMeans_min : 2.083333
+  rowMeans_mode : 4
+  rowMeans_sd : 0.433932
+  rowMeans_skewness : -0.432034
+  rowSums_entropy : 0.5036795
+  rowSums_gini : 0.5421755
+  rowSums_kurtosis : 22.00099
+  rowSums_max : 8219
+  rowSums_mean : 628.8841
+  rowSums_median : 349.5
+  rowSums_min : 56
+  rowSums_mode : 83
+  rowSums_sd : 798.762
+  rowSums_skewness : 3.718188
+  sparsity : 0.948252
+<hash> containing 3 key-value pair(s).
+  entropy : 0.5839213
+  gini : 0.5738014
+  sparsity : 0.948252
+<hash> containing 6 key-value pair(s).
+  density : 0.05174797
+  item.count.gini : 0.5812375
+  item.count.skewness : 2.521059
+  user.count.gini : 0.5549628
+  user.count.skewness : 3.660638
+  variance : 1.248143
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 31.25577
+  item.entropy.mean : 0.05080246
+  item.mean.mean : 3.290245
+  user.TFIDF.mean : 5.663907
+  user.average_similarity.mean : 0.374966
+  user.clustering_coefficient.mean : 0.02322317
+  user.count.mean : 177.0298
+  user.mean.mean : 3.683868
+  user.number_neighbours.mean : 247.9901
+  user.standard_deviation.mean : 1.01071
+  user_coratings.jaccard.mean : 0.05492182
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 177.0298
+  user.mean.mean : 0.1838305
+  user.variance.mean : 1.064277
+[1] "movielens20m.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.601593
+  colCounts_gini : 0.849386
+  colCounts_kurtosis : 68.08335
+  colCounts_max : 6783
+  colCounts_mean : 122.0954
+  colCounts_median : 10
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 390.5355
+  colCounts_skewness : 7.039708
+  colMeans_entropy : 0.02738141
+  colMeans_gini : 0.1172034
+  colMeans_kurtosis : 1.1391
+  colMeans_max : 5
+  colMeans_mean : 3.409889
+  colMeans_median : 3.5
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.7351488
+  colMeans_skewness : -0.7360475
+  colSums_entropy : 1.65439
+  colSums_gini : 0.8581056
+  colSums_kurtosis : 84.49543
+  colSums_max : 28913
+  colSums_mean : 445.4949
+  colSums_median : 35
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 1514.61
+  colSums_skewness : 7.769058
+  nitems : 16680
+  nratings : 2036552
+  nusers : 13849
+  ratings_entropy : 0.05201171
+  ratings_gini : 0.1565892
+  ratings_kurtosis : -0.05782107
+  ratings_max : 5
+  ratings_mean : 3.648743
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.060747
+  ratings_skewness : -0.6390555
+  rowCounts_entropy : 0.5830525
+  rowCounts_gini : 0.5799245
+  rowCounts_kurtosis : 32.40906
+  rowCounts_max : 3662
+  rowCounts_mean : 147.0541
+  rowCounts_median : 69
+  rowCounts_min : 20
+  rowCounts_mode : 20
+  rowCounts_sd : 223.9373
+  rowCounts_skewness : 4.573068
+  rowMeans_entropy : 0.007406474
+  rowMeans_gini : 0.06589582
+  rowMeans_kurtosis : 0.9930908
+  rowMeans_max : 5
+  rowMeans_mean : 3.727969
+  rowMeans_median : 3.75
+  rowMeans_min : 1
+  rowMeans_mode : 4
+  rowMeans_sd : 0.442074
+  rowMeans_skewness : -0.5168779
+  rowSums_entropy : 0.564358
+  rowSums_gini : 0.5719771
+  rowSums_kurtosis : 29.64057
+  rowSums_max : 13504
+  rowSums_mean : 536.5626
+  rowSums_median : 262
+  rowSums_min : 20
+  rowSums_mode : 95
+  rowSums_sd : 781.3137
+  rowSums_skewness : 4.303513
+  sparsity : 0.9911838
+<hash> containing 3 key-value pair(s).
+  entropy : 0.4856956
+  gini : 0.5284105
+  sparsity : 0.9911838
+<hash> containing 6 key-value pair(s).
+  density : 0.008816192
+  item.count.gini : 0.849386
+  item.count.skewness : 7.039708
+  user.count.gini : 0.5799245
+  user.count.skewness : 4.573068
+  variance : 1.125184
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 122.0954
+  item.entropy.mean : 0.02958676
+  item.mean.mean : 3.409889
+  user.TFIDF.mean : 9.071
+  user.average_similarity.mean : 0.4103342
+  user.clustering_coefficient.mean : 0.03630052
+  user.count.mean : 147.0541
+  user.mean.mean : 3.727969
+  user.number_neighbours.mean : 384.934
+  user.standard_deviation.mean : 0.9545169
+  user_coratings.jaccard.mean : 0.04786889
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 147.0541
+  user.mean.mean : 0.03216802
+  user.variance.mean : 0.9649201
+[1] "movielens_latest.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.63142
+  colCounts_gini : 0.8546962
+  colCounts_kurtosis : 72.87541
+  colCounts_max : 7202
+  colCounts_mean : 123.2228
+  colCounts_median : 10
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 403.9745
+  colCounts_skewness : 7.247476
+  colMeans_entropy : 0.02567704
+  colMeans_gini : 0.1150691
+  colMeans_kurtosis : 1.01572
+  colMeans_max : 5
+  colMeans_mean : 3.411863
+  colMeans_median : 3.5
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.7181196
+  colMeans_skewness : -0.666152
+  colSums_entropy : 1.683257
+  colSums_gini : 0.8630106
+  colSums_kurtosis : 90.8919
+  colSums_max : 31070
+  colSums_mean : 449.7931
+  colSums_median : 33
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 1565.615
+  colSums_skewness : 8.017366
+  nitems : 17133
+  nratings : 2111176
+  nusers : 22906
+  ratings_entropy : 0.05189432
+  ratings_gini : 0.1563259
+  ratings_kurtosis : -0.04689165
+  ratings_max : 5
+  ratings_mean : 3.650243
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.059752
+  ratings_skewness : -0.6413223
+  rowCounts_entropy : 0.8697748
+  rowCounts_gini : 0.6837912
+  rowCounts_kurtosis : 53.02
+  rowCounts_max : 3397
+  rowCounts_mean : 92.16694
+  rowCounts_median : 28
+  rowCounts_min : 1
+  rowCounts_mode : 15
+  rowCounts_sd : 185.0055
+  rowCounts_skewness : 5.785781
+  rowMeans_entropy : 0.01199794
+  rowMeans_gini : 0.07977099
+  rowMeans_kurtosis : 2.136864
+  rowMeans_max : 5
+  rowMeans_mean : 3.663514
+  rowMeans_median : 3.705882
+  rowMeans_min : 1
+  rowMeans_mode : 4
+  rowMeans_sd : 0.5377993
+  rowMeans_skewness : -0.8088287
+  rowSums_entropy : 0.863936
+  rowSums_gini : 0.6817107
+  rowSums_kurtosis : 44.60411
+  rowSums_max : 10922
+  rowSums_mean : 336.4318
+  rowSums_median : 105
+  rowSums_min : 1
+  rowSums_mode : 60
+  rowSums_sd : 651.3274
+  rowSums_skewness : 5.346052
+  sparsity : 0.9946205
+<hash> containing 3 key-value pair(s).
+  entropy : 0.6903081
+  gini : 0.6051223
+  sparsity : 0.9946205
+<hash> containing 6 key-value pair(s).
+  density : 0.005379498
+  item.count.gini : 0.8546962
+  item.count.skewness : 7.247476
+  user.count.gini : 0.6837912
+  user.count.skewness : 5.785781
+  variance : 1.123074
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 123.2228
+  item.entropy.mean : 0.02888337
+  item.mean.mean : 3.411863
+  user.TFIDF.mean : 7.567
+  user.average_similarity.mean : 0.3600426
+  user.clustering_coefficient.mean : 0.0888908
+  user.count.mean : 92.16694
+  user.mean.mean : 3.663514
+  user.number_neighbours.mean : 168.538
+  user.standard_deviation.mean : 0.963714
+  user_coratings.jaccard.mean : 0.02264336
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 92.16694
+  user.mean.mean : 0.01963648
+  user.variance.mean : 0.9956975
+[1] "movietweetings_latest.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.9548432
+  colCounts_gini : 0.6959492
+  colCounts_kurtosis : 87.83348
+  colCounts_max : 285
+  colCounts_mean : 5.313536
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 15.55384
+  colCounts_skewness : 8.2663
+  colMeans_entropy : 0.03035996
+  colMeans_gini : 0.1202724
+  colMeans_kurtosis : 0.9879999
+  colMeans_max : 5
+  colMeans_mean : 3.750983
+  colMeans_median : 4
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.8416415
+  colMeans_skewness : -0.8529887
+  colSums_entropy : 1.005427
+  colSums_gini : 0.7159258
+  colSums_kurtosis : 100.5292
+  colSums_max : 1240
+  colSums_mean : 20.69557
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 63.52929
+  colSums_skewness : 8.808884
+  nitems : 7358
+  nratings : 39097
+  nusers : 3702
+  ratings_entropy : 0.03366349
+  ratings_gini : 0.1225483
+  ratings_kurtosis : 0.7320179
+  ratings_max : 5
+  ratings_mean : 3.894877
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 0.9165054
+  ratings_skewness : -0.8359105
+  rowCounts_entropy : 1.177136
+  rowCounts_gini : 0.7688569
+  rowCounts_kurtosis : 247.5389
+  rowCounts_max : 965
+  rowCounts_mean : 10.56105
+  rowCounts_median : 2
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 32.15622
+  rowCounts_skewness : 11.63602
+  rowMeans_entropy : 0.02749933
+  rowMeans_gini : 0.1060654
+  rowMeans_kurtosis : 2.809756
+  rowMeans_max : 5
+  rowMeans_mean : 4.151176
+  rowMeans_median : 4.062745
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 0.8520423
+  rowMeans_skewness : -1.428151
+  rowSums_entropy : 1.14014
+  rowSums_gini : 0.7606389
+  rowSums_kurtosis : 251.4702
+  rowSums_max : 3668
+  rowSums_mean : 41.13398
+  rowSums_median : 8
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 121.1284
+  rowSums_skewness : 11.615
+  sparsity : 0.9985647
+<hash> containing 3 key-value pair(s).
+  entropy : 0.95785
+  gini : 0.6940474
+  sparsity : 0.9985647
+<hash> containing 6 key-value pair(s).
+  density : 0.001435315
+  item.count.gini : 0.6959492
+  item.count.skewness : 8.2663
+  user.count.gini : 0.7688569
+  user.count.skewness : 11.63602
+  variance : 0.8399822
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 5.313536
+  item.entropy.mean : 0.007547288
+  item.mean.mean : 3.750983
+  user.TFIDF.mean : 3.936
+  user.average_similarity.mean : 0.376952
+  user.clustering_coefficient.mean : 0.2726953
+  user.count.mean : 10.56105
+  user.mean.mean : 4.151176
+  user.number_neighbours.mean : 34.304
+  user.standard_deviation.mean : 0.7072443
+  user_coratings.jaccard.mean : 0.00399077
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 10.56105
+  user.mean.mean : 0.005590375
+  user.variance.mean : 0.6832772
+[1] "movietweetings_recsys2014.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.8955312
+  colCounts_gini : 0.6674813
+  colCounts_kurtosis : 110.3152
+  colCounts_max : 262
+  colCounts_mean : 4.399032
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 13.50981
+  colCounts_skewness : 9.323748
+  colMeans_entropy : 0.03613571
+  colMeans_gini : 0.1319078
+  colMeans_kurtosis : 6.742624
+  colMeans_max : 15
+  colMeans_mean : 3.772254
+  colMeans_median : 4
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.9496863
+  colMeans_skewness : 0.1358735
+  colSums_entropy : 0.9515785
+  colSums_gini : 0.6930418
+  colSums_kurtosis : 127.6379
+  colSums_max : 1165
+  colSums_mean : 17.23265
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 55.5316
+  colSums_skewness : 9.946917
+  nitems : 4754
+  nratings : 20913
+  nusers : 2491
+  ratings_entropy : 0.03921277
+  ratings_gini : 0.1326087
+  ratings_kurtosis : 10.59397
+  ratings_max : 20
+  ratings_mean : 3.917372
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 4
+  ratings_sd : 1.047851
+  ratings_skewness : 0.7402622
+  rowCounts_entropy : 0.9691596
+  rowCounts_gini : 0.7149354
+  rowCounts_kurtosis : 70.53828
+  rowCounts_max : 340
+  rowCounts_mean : 8.395424
+  rowCounts_median : 2
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 19.5419
+  rowCounts_skewness : 6.7963
+  rowMeans_entropy : 0.02740209
+  rowMeans_gini : 0.1077756
+  rowMeans_kurtosis : 34.24786
+  rowMeans_max : 18
+  rowMeans_mean : 4.168482
+  rowMeans_median : 4
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 0.9448752
+  rowMeans_skewness : 2.000088
+  rowSums_entropy : 0.9351708
+  rowSums_gini : 0.7058031
+  rowSums_kurtosis : 68.30219
+  rowSums_max : 1318
+  rowSums_mean : 32.888
+  rowSums_median : 9
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 74.22318
+  rowSums_skewness : 6.638816
+  sparsity : 0.998234
+<hash> containing 3 key-value pair(s).
+  entropy : 0.7152749
+  gini : 0.6079208
+  sparsity : 0.998234
+<hash> containing 6 key-value pair(s).
+  density : 0.00176597
+  item.count.gini : 0.6674813
+  item.count.skewness : 9.323748
+  user.count.gini : 0.7149354
+  user.count.skewness : 6.7963
+  variance : 1.097992
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 4.399032
+  item.entropy.mean : 0.009144382
+  item.mean.mean : 3.772254
+  user.TFIDF.mean : 2.663
+  user.average_similarity.mean : 0.4304082
+  user.clustering_coefficient.mean : 0.2176618
+  user.count.mean : 8.395424
+  user.mean.mean : 4.168482
+  user.number_neighbours.mean : 56.542
+  user.standard_deviation.mean : 0.7459959
+  user_coratings.jaccard.mean : 0.006573491
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 8.395424
+  user.mean.mean : 0.006917963
+  user.variance.mean : 0.7993178
+[1] "tripadvisor.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7293414
+  colCounts_gini : 0.6334452
+  colCounts_kurtosis : 58.25853
+  colCounts_max : 461
+  colCounts_mean : 14.26157
+  colCounts_median : 6
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 25.57506
+  colCounts_skewness : 6.075423
+  colMeans_entropy : 0.0426046
+  colMeans_gini : 0.1396108
+  colMeans_kurtosis : 1.680077
+  colMeans_max : 12
+  colMeans_mean : 3.717751
+  colMeans_median : 4
+  colMeans_min : 1
+  colMeans_mode : 4
+  colMeans_sd : 0.9647828
+  colMeans_skewness : -0.8581319
+  colSums_entropy : 0.7960214
+  colSums_gini : 0.6552163
+  colSums_kurtosis : 59.38264
+  colSums_max : 1979
+  colSums_mean : 56.96884
+  colSums_median : 23
+  colSums_min : 1
+  colSums_mode : 4
+  colSums_sd : 104.7128
+  colSums_skewness : 6.034749
+  nitems : 10590
+  nratings : 151030
+  nusers : 77851
+  ratings_entropy : 0.06339799
+  ratings_gini : 0.160017
+  ratings_kurtosis : 3.014002
+  ratings_max : 19
+  ratings_mean : 3.994571
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.259937
+  ratings_skewness : -0.3613614
+  rowCounts_entropy : 0.2381914
+  rowCounts_gini : 0.359598
+  rowCounts_kurtosis : 66.93065
+  rowCounts_max : 52
+  rowCounts_mean : 1.939988
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 1.855359
+  rowCounts_skewness : 5.749072
+  rowMeans_entropy : 0.06310608
+  rowMeans_gini : 0.1602534
+  rowMeans_kurtosis : 2.061914
+  rowMeans_max : 15
+  rowMeans_mean : 3.967893
+  rowMeans_median : 4
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.232371
+  rowMeans_skewness : -0.6238087
+  rowSums_entropy : 0.2996285
+  rowSums_gini : 0.4147527
+  rowSums_kurtosis : 59.90882
+  rowSums_max : 210
+  rowSums_mean : 7.749419
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 7.934717
+  rowSums_skewness : 5.359324
+  sparsity : 0.9998168
+<hash> containing 3 key-value pair(s).
+  entropy : 2.446286
+  gini : 0.9453834
+  sparsity : 0.9998168
+<hash> containing 6 key-value pair(s).
+  density : 0.0001831906
+  item.count.gini : 0.6334452
+  item.count.skewness : 6.075423
+  user.count.gini : 0.359598
+  user.count.skewness : 5.749072
+  variance : 1.58744
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 14.26157
+  item.entropy.mean : 0.007253709
+  item.mean.mean : 3.717751
+  user.TFIDF.mean : 1.496
+  user.average_similarity.mean : 0.1604746
+  user.clustering_coefficient.mean : 0.8452275
+  user.count.mean : 1.939988
+  user.mean.mean : 3.967893
+  user.number_neighbours.mean : 0.844
+  user.standard_deviation.mean : 0.4067192
+  user_coratings.jaccard.mean : 0.0004856648
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 1.939988
+  user.mean.mean : 0.0007317676
+  user.variance.mean : 0.5029373
+[1] "yahoo-movies.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.035445
+  colCounts_gini : 0.7132487
+  colCounts_kurtosis : 166.3693
+  colCounts_max : 448
+  colCounts_mean : 5.427906
+  colCounts_median : 1
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 19.54048
+  colCounts_skewness : 11.24624
+  colMeans_entropy : 0.05771802
+  colMeans_gini : 0.1377924
+  colMeans_kurtosis : 1.645229
+  colMeans_max : 5
+  colMeans_mean : 4.127405
+  colMeans_median : 4.5
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.155319
+  colMeans_skewness : -1.580124
+  colSums_entropy : 1.0592
+  colSums_gini : 0.7246869
+  colSums_kurtosis : 211.7357
+  colSums_max : 2110
+  colSums_mean : 22.43575
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 81.81361
+  colSums_skewness : 12.40111
+  nitems : 4078
+  nratings : 22135
+  nusers : 764
+  ratings_entropy : 0.06286389
+  ratings_gini : 0.1419868
+  ratings_kurtosis : 1.164519
+  ratings_max : 5
+  ratings_mean : 4.133409
+  ratings_median : 5
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.212139
+  ratings_skewness : -1.467952
+  rowCounts_entropy : 0.3469283
+  rowCounts_gini : 0.4351578
+  rowCounts_kurtosis : 172.1484
+  rowCounts_max : 827
+  rowCounts_mean : 28.97251
+  rowCounts_median : 17
+  rowCounts_min : 10
+  rowCounts_mode : 12
+  rowCounts_sd : 42.19394
+  rowCounts_skewness : 10.46451
+  rowMeans_entropy : 0.01069447
+  rowMeans_gini : 0.07331575
+  rowMeans_kurtosis : 2.886441
+  rowMeans_max : 5
+  rowMeans_mean : 4.121062
+  rowMeans_median : 4.2
+  rowMeans_min : 1.307692
+  rowMeans_mode : 5
+  rowMeans_sd : 0.5648904
+  rowMeans_skewness : -1.23538
+  rowSums_entropy : 0.3629066
+  rowSums_gini : 0.44397
+  rowSums_kurtosis : 223.0006
+  rowSums_max : 3951
+  rowSums_mean : 119.7552
+  rowSums_median : 69
+  rowSums_min : 17
+  rowSums_mode : 55
+  rowSums_sd : 189.3339
+  rowSums_skewness : 12.23038
+  sparsity : 0.9928954
+<hash> containing 3 key-value pair(s).
+  entropy : 0.5087625
+  gini : 0.5263089
+  sparsity : 0.9928954
+<hash> containing 6 key-value pair(s).
+  density : 0.007104589
+  item.count.gini : 0.7132487
+  item.count.skewness : 11.24624
+  user.count.gini : 0.4351578
+  user.count.skewness : 10.46451
+  variance : 1.46928
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 5.427906
+  item.entropy.mean : 0.02038389
+  item.mean.mean : 4.127405
+  user.TFIDF.mean : 5.337696
+  user.average_similarity.mean : 0.4616926
+  user.clustering_coefficient.mean : 0.05661593
+  user.count.mean : 28.97251
+  user.mean.mean : 4.121062
+  user.number_neighbours.mean : 333.5026
+  user.standard_deviation.mean : 1.017485
+  user_coratings.jaccard.mean : 0.06644871
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 28.97251
+  user.mean.mean : 0.02936617
+  user.variance.mean : 1.247409
+[1] "yahoo-music.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 1.033217
+  colCounts_gini : 0.7276434
+  colCounts_kurtosis : 37.7471
+  colCounts_max : 248
+  colCounts_mean : 6.677922
+  colCounts_median : 2
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 17.00662
+  colCounts_skewness : 5.458583
+  colMeans_entropy : 0.1064628
+  colMeans_gini : 0.2417447
+  colMeans_kurtosis : -0.9799459
+  colMeans_max : 5
+  colMeans_mean : 2.968462
+  colMeans_median : 3
+  colMeans_min : 1
+  colMeans_mode : 3
+  colMeans_sd : 1.260887
+  colMeans_skewness : -0.1154659
+  colSums_entropy : 1.218466
+  colSums_gini : 0.7797285
+  colSums_kurtosis : 40.60414
+  colSums_max : 991
+  colSums_mean : 23.41212
+  colSums_median : 5
+  colSums_min : 1
+  colSums_mode : 1
+  colSums_sd : 65.31483
+  colSums_skewness : 5.636998
+  nitems : 4620
+  nratings : 30852
+  nusers : 613
+  ratings_entropy : 0.1453335
+  ratings_gini : 0.2502654
+  ratings_kurtosis : -1.354306
+  ratings_max : 5
+  ratings_mean : 3.505899
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.635439
+  ratings_skewness : -0.5459991
+  rowCounts_entropy : 0.8073878
+  rowCounts_gini : 0.6448636
+  rowCounts_kurtosis : 205.9282
+  rowCounts_max : 2090
+  rowCounts_mean : 50.32953
+  rowCounts_median : 23
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 108.3465
+  rowCounts_skewness : 11.87497
+  rowMeans_entropy : 0.03507421
+  rowMeans_gini : 0.1253725
+  rowMeans_kurtosis : 0.4093532
+  rowMeans_max : 5
+  rowMeans_mean : 4.145253
+  rowMeans_median : 4.487179
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 0.9865093
+  rowMeans_skewness : -1.143002
+  rowSums_entropy : 0.7078824
+  rowSums_gini : 0.6058762
+  rowSums_kurtosis : 155.2183
+  rowSums_max : 5929
+  rowSums_mean : 176.4502
+  rowSums_median : 100
+  rowSums_min : 2
+  rowSums_mode : 5
+  rowSums_sd : 329.2091
+  rowSums_skewness : 10.04605
+  sparsity : 0.9891062
+<hash> containing 3 key-value pair(s).
+  entropy : 0.554984
+  gini : 0.5491692
+  sparsity : 0.9891062
+<hash> containing 6 key-value pair(s).
+  density : 0.01089384
+  item.count.gini : 0.7276434
+  item.count.skewness : 5.458583
+  user.count.gini : 0.6448636
+  user.count.skewness : 11.87497
+  variance : 2.67466
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 6.677922
+  item.entropy.mean : 0.05997885
+  item.mean.mean : 2.968462
+  user.TFIDF.mean : 7.536705
+  user.average_similarity.mean : 0.4318393
+  user.clustering_coefficient.mean : 0.0744728
+  user.count.mean : 50.32953
+  user.mean.mean : 4.145253
+  user.number_neighbours.mean : 164.7504
+  user.standard_deviation.mean : 0.8608948
+  user_coratings.jaccard.mean : 0.03327503
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 50.32953
+  user.mean.mean : 0.03819269
+  user.variance.mean : 1.179101
+[1] "yelp.csv"
+<hash> containing 74 key-value pair(s).
+  colCounts_entropy : 0.7104508
+  colCounts_gini : 0.6177021
+  colCounts_kurtosis : 308.8368
+  colCounts_max : 475
+  colCounts_mean : 4.596091
+  colCounts_median : 2
+  colCounts_min : 1
+  colCounts_mode : 1
+  colCounts_sd : 11.11945
+  colCounts_skewness : 13.31975
+  colMeans_entropy : 0.0819101
+  colMeans_gini : 0.1945726
+  colMeans_kurtosis : 8.263219
+  colMeans_max : 30
+  colMeans_mean : 3.802829
+  colMeans_median : 4
+  colMeans_min : 1
+  colMeans_mode : 5
+  colMeans_sd : 1.400477
+  colMeans_skewness : 0.3750543
+  colSums_entropy : 0.7784543
+  colSums_gini : 0.6454532
+  colSums_kurtosis : 332.6872
+  colSums_max : 2070
+  colSums_mean : 17.83373
+  colSums_median : 7
+  colSums_min : 1
+  colSums_mode : 5
+  colSums_sd : 44.36119
+  colSums_skewness : 13.5125
+  nitems : 46045
+  nratings : 211627
+  nusers : 55233
+  ratings_entropy : 0.101597
+  ratings_gini : 0.2096758
+  ratings_kurtosis : 24.14149
+  ratings_max : 50
+  ratings_mean : 3.880195
+  ratings_median : 4
+  ratings_min : 1
+  ratings_mode : 5
+  ratings_sd : 1.634917
+  ratings_skewness : 1.451636
+  rowCounts_entropy : 0.7375985
+  rowCounts_gini : 0.6151711
+  rowCounts_kurtosis : 1015.707
+  rowCounts_max : 913
+  rowCounts_mean : 3.831532
+  rowCounts_median : 1
+  rowCounts_min : 1
+  rowCounts_mode : 1
+  rowCounts_sd : 11.52111
+  rowCounts_skewness : 21.99855
+  rowMeans_entropy : 0.09312396
+  rowMeans_gini : 0.2002936
+  rowMeans_kurtosis : 7.86871
+  rowMeans_max : 33
+  rowMeans_mean : 3.787339
+  rowMeans_median : 4
+  rowMeans_min : 1
+  rowMeans_mode : 5
+  rowMeans_sd : 1.441224
+  rowMeans_skewness : 0.01230684
+  rowSums_entropy : 0.8161548
+  rowSums_gini : 0.6495682
+  rowSums_kurtosis : 1094.91
+  rowSums_max : 3771
+  rowSums_mean : 14.86709
+  rowSums_median : 5
+  rowSums_min : 1
+  rowSums_mode : 5
+  rowSums_sd : 46.71567
+  rowSums_skewness : 22.94226
+  sparsity : 0.9999168
+<hash> containing 3 key-value pair(s).
+  entropy : 2.976373
+  gini : 0.9772722
+  sparsity : 0.9999168
+<hash> containing 6 key-value pair(s).
+  density : 8.321277e-05
+  item.count.gini : 0.6177021
+  item.count.skewness : 13.31975
+  user.count.gini : 0.6151711
+  user.count.skewness : 21.99855
+  variance : 2.672954
+<hash> containing 11 key-value pair(s).
+  item.count.mean : 4.596091
+  item.entropy.mean : 0.007029845
+  item.mean.mean : 3.802829
+  user.TFIDF.mean : 3.077
+  user.average_similarity.mean : 0.1447112
+  user.clustering_coefficient.mean : 0.6512254
+  user.count.mean : 3.831532
+  user.mean.mean : 3.787339
+  user.number_neighbours.mean : 1.194
+  user.standard_deviation.mean : 1.182639
+  user_coratings.jaccard.mean : 0.0002584029
+<hash> containing 3 key-value pair(s).
+  user.count.mean : 3.831532
+  user.mean.mean : 0.0003228818
+  user.variance.mean : 2.050179
+There were 50 or more warnings (use warnings() to see the first 50)
+> 
+> 
+> 
+> 
+> 
+> proc.time()
+     user    system   elapsed 
+51393.337    45.691 88238.945 
