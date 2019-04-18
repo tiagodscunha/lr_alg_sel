@@ -1,4 +1,4 @@
-# lr_alg_sel
+# Collaborative Filtering algorithm selection using Label Ranking metamodels
 
 Source code for Label Ranking approaches for Collaborative Filtering algorithm selection. It contains all experimental procedures used to empirically compare multiple Collaborative Filtering algorithm selection studies. The code can be used to replicate the experiments of the contributions presented in the following research papers:
 
@@ -28,6 +28,7 @@ The remaining items in this repository can be organized as follows:
 
 Folders:
 - labelrankingforests-master: source code with Label Ranking algorithms implementation and evaluation and tuning procedures (source code adapted from https://github.com/rebelosa/labelrankingforests)
+- metafeatures_1000users: metafeatures from competitors (more information in: https://www.sciencedirect.com/science/article/pii/S0020025517309702)
 - metafeatures_graph: graph-based CF metafeatures (proposed in https://arxiv.org/abs/1807.09097)
 - metafeatures_landmarkers and metafeatures_landmarkers_all: subsampling landmarkers metafeatures (proposed in https://link.springer.com/chapter/10.1007/978-3-319-67786-6_14)
 - metafeatures_statistical: statistical and information theoretical metafeatures (proposed in https://link.springer.com/chapter/10.1007/978-3-319-46227-1_25)
@@ -42,4 +43,4 @@ Other Files:
 - RF_multioutput.R: auxiliary script used to instantiate a multi-output regressor to be used in our ALORS implementation
 - results_paper.R: main script which loads the results from the folder and creates the visualizations 
 
-Lastly, notice the datasets folder used in some scipts has been removed due to size restrictions and copyright ownership. Please refer to the appropriate references in the following paper to obtain the original sources to download the data: "Cunha, T., Soares, C., & de Carvalho, A. C. P. L. F. (2018). Algorithm Selection for Collaborative Filtering: the influence of graph metafeatures and multicriteria metatargets. ArXiv E-Prints, 1–25. Retrieved from http://arxiv.org/abs/1807.09097".
+Lastly, notice the datasets folder used in some scipts has not been included due to copyright ownership. Please refer to the appropriate references in the following paper to obtain the original sources to download the data: "Cunha, T., Soares, C., & de Carvalho, A. C. P. L. F. (2018). Algorithm Selection for Collaborative Filtering: the influence of graph metafeatures and multicriteria metatargets. ArXiv E-Prints, 1–25. Retrieved from http://arxiv.org/abs/1807.09097".
