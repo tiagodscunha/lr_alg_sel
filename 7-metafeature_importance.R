@@ -215,7 +215,7 @@ A[which(A$metafeatures == "ratings_skewness"),]$metafeatures <- "R.ratings.skewn
 
 g1 <- ggplot(A,aes(x=metafeatures,y=rank)) + geom_bar(stat = "identity",  position = "identity", width=0.5) + 
   theme(axis.title.x = element_blank(),axis.title.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) +
-  ggtitle("RM")
+  ggtitle("RM") + coord_flip()
 g1
 
 B <- B[which(B$rank < 6),]
@@ -228,7 +228,7 @@ B[which(B$metafeatures == "LatentFeatureLogLinearModel.RMSE"),]$metafeatures <- 
 
 g2 <- ggplot(B,aes(x=metafeatures,y=rank)) + geom_bar(stat = "identity",  position = "identity", width=0.5) + 
   theme(axis.title.x = element_blank(),axis.title.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) +
-  ggtitle("SL")
+  ggtitle("SL") + coord_flip()
 g2
 
 C <- C[which(C$rank < 50),]
@@ -240,7 +240,7 @@ C[which(C$metafeatures == "communities_alpha_variance_variance"),]$metafeatures 
 
 g3 <- ggplot(C,aes(x=metafeatures,y=rank)) + geom_bar(stat = "identity",  position = "identity", width=0.5) + 
   theme(axis.title.x = element_blank(),axis.title.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) +
-  ggtitle("GR")
+  ggtitle("GR") + coord_flip()
 g3
 
 D <- D[which(D$rank < 49),]
@@ -254,7 +254,7 @@ D[which(D$metafeatures == "colMeans_entropy"),]$metafeatures <- "I.mean.entropy"
 
 g4 <- ggplot(D,aes(x=metafeatures,y=rank)) + geom_bar(stat = "identity",  position = "identity", width=0.5) + 
   theme(axis.title.x = element_blank(),axis.title.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5)) +
-  ggtitle("CM")
+  ggtitle("CM") + coord_flip()
 g4
 
 library(grid)
