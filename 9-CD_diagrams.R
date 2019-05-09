@@ -1,11 +1,11 @@
 library(scmamp)
 
-load("detailed_meta_results.Rda")
+load("results/detailed_meta_results.Rda")
 
 IR_old <- IR
 RP_old <- RP
 
-load("detailed_meta_results_alternative_metafeatures.Rda")
+load("results/detailed_meta_results_alternative_metafeatures.Rda")
 
 IR <- rbind(IR_old,IR)
 RP <- rbind(RP_old,RP)
