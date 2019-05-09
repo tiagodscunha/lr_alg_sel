@@ -54,6 +54,28 @@ processDataset2 <- function(dt,problem){
   tmp
 }
 
+processDataset3 <- function(dt,problem){
+  tmp <- apply(dt[,2:dim(dt)[2]],2,function(x){
+    unlist(lapply(x,getMainValue))
+  })
+  rownames(tmp) <- dt$datasets
+  tmp <- melt(tmp)
+  
+  colnames(tmp) <- c("strategy","algorithm","performance")
+  
+  levels(tmp$algorithm) <- c(levels(tmp$algorithm),"AVG","KNN","RT","RFR")
+  tmp[which(tmp$algorithm == "avg"),]$algorithm <- "AVG"
+  tmp[which(tmp$algorithm == "knn"),]$algorithm <- "KNN"
+  tmp[which(tmp$algorithm == "rt"),]$algorithm <- "RT"
+  tmp[which(tmp$algorithm == "rf"),]$algorithm <- "RFR"
+  
+  print(levels(tmp$strategy))
+  tmp$strategy <- factor(tmp$strategy,levels(tmp$strategy)[c(6,2,3,5,1,4)])
+  tmp$problem <- problem
+  tmp
+}
+
+
 createSimpleGraphic <- function(tmp){
   
   cbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7","#9999CC", "#66CC99")
@@ -98,6 +120,20 @@ RMSE_dt <- processDataset(RMSE,"RMSE")
 tmp <- rbind(NDCG_dt,AUC_dt,NMAE_dt,RMSE_dt)
 g1 <- createSimpleGraphic(tmp)
 g1
+
+
+load("results/regular_metatarget_new_metafeatures_graphics.Rda")
+
+NDCG_dt <- processDataset3(NDCG,"NDCG")
+AUC_dt <- processDataset3(AUC,"AUC")
+NMAE_dt <- processDataset3(NMAE,"NMAE")
+RMSE_dt <- processDataset3(RMSE,"RMSE")
+
+tmp <- rbind(NDCG_dt,AUC_dt,NMAE_dt,RMSE_dt)
+tmp$strategy <- factor(tmp$strategy,levels(tmp$strategy)[c(3,1,2,4)])
+g1 <- createSimpleGraphic(tmp)
+g1
+
 
 load("results/new_metafeatures_graphics.Rda")
 

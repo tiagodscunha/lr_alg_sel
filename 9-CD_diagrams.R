@@ -51,8 +51,6 @@ tmp <- data.frame(
 )
 plotCD (tmp, alpha=0.05, cex=1.25)
 
-#não está a ser usado no paper. esperamos por pedido dos reviewers?
-
 
 load("detailed_meta_results_landmarkers.Rda")
 
@@ -64,3 +62,34 @@ tmp <- data.frame(
 )
 
 plotCD (tmp, alpha=0.05, cex=1.25)
+
+
+######################
+
+load("results/detailed_meta_results_regular_metatarget.Rda")
+
+AUC_old <- AUC
+NDCG_old <- NDCG
+NMAE_old <- NMAE
+RMSE_old <- RMSE
+
+load("results/detailed_meta_results_regular_metatarget_new_metafeatures.Rda")
+
+IR <- rbind(AUC_old,AUC,NDCG_old,NDCG)
+RP <- rbind(NMAE_old,NMAE,RMSE_old,RMSE)
+
+
+tmp <- data.frame(
+  RM = getPerformance(IR,RP,"RM","knn"),
+  SL = getPerformance(IR,RP,"SL","knn"),
+  GR = getPerformance(IR,RP,"GR","rfr"),
+  CM = getPerformance(IR,RP,"UN","knn"),
+  B = getPerformance(IR,RP,"B","knn"),
+  C = getPerformance(IR,RP,"C","knn"),
+  D = getPerformance(IR,RP,"D","knn"),
+  E = getPerformance(IR,RP,"E","knn"),
+  AVG = getPerformance(IR,RP,"UN","baseline")
+)
+
+plotCD (tmp, alpha=0.05, cex=1.25)
+
