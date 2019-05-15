@@ -184,3 +184,20 @@ tmp <-rbind(tmp,tmp1)
 make_graph(tmp)
 
 
+load("results/regular_metatarget_graphics_base_impact_new_metafeatures.Rda")
+
+NDCG <- correctDataset2(NDCG,F,c("B","C","D","E"))
+NDCG$problem <- "NDCG"
+AUC <- correctDataset2(AUC,F,c("B","C","D","E"))
+AUC$problem <- "AUC"
+NMAE <- correctDataset2(NMAE,T,c("B","C","D","E"))
+NMAE$problem <- "NMAE"
+RMSE <- correctDataset2(RMSE,T,c("B","C","D","E"))
+RMSE$problem <- "RMSE"
+
+tmp <-rbind(NDCG,AUC,NMAE,RMSE)
+make_graph(tmp)
+
+
+
+
